@@ -1,6 +1,6 @@
 'use strict';
 const main=document.querySelector('#main'),modal=document.querySelector('#modal');
-let user,csrf,song,searchPage=1,searchQuery='',searchScope='catalog',lyricCandidates=[];
+let user,csrf,song,searchPage=1,searchQuery='',searchScope='catalog',lyricCandidates=[],songComments=[],songCommentsPage=0,songCommentsPages=0;
 async function api(path,method='GET',data){
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
  try{
@@ -31,7 +31,30 @@ async function searchSongs(){
   target.innerHTML=`${r.matched_artists?.length?`<p class="small-muted">가수 별칭으로 찾았어요: ${esc(searchQuery)} → ${esc(r.matched_artists.join(', '))}</p>`:''}<div class="song-grid">${r.items.map(searchScope==='catalog'?externalCard:card).join('')||'<p>검색 결과가 없습니다. 곡명이나 가수명을 바꿔 보세요.</p>'}</div><div class="search-pages">${searchPage>1?btn('이전','search-prev'):''}<span>${searchPage} / ${Math.max(1,r.pages)}</span>${searchPage<r.pages?btn('다음','search-next'):''}</div>`;
  }catch(e){if(target.isConnected)target.innerHTML=`<p role="alert">${esc(e.message)}</p>${btn('다시 검색','search-retry')}`;}
 }
-function lyricsHtml(s){return `${s.lyrics_title&&s.lyrics_title!==s.title?`<p class="small-muted">가사 제공처 제목: ${esc(s.lyrics_title)}${s.lyrics_match==='user_confirmed'?' · 사용자 확인 연결':' · 확인된 다른 제목'}</p>`:''}${s.passages.map(p=>`<div><button class="lyric-line" data-action="passage" data-id="${p.id}" aria-expanded="false" aria-controls="p-${p.id}">${esc(p.text)}</button><div id="p-${p.id}"></div></div>`).join('')||'<p>가사 없음 — LRCLIB에서 곡명·가수·재생시간이 일치하는 가사를 찾지 못했습니다.</p>'}${s.source_url?`<p class="lyrics-source"><a href="${esc(s.source_url)}" target="_blank" rel="noopener">가사 출처: LRCLIB</a> · 이용자 등록 자료</p>`:''}`;}
+const inlineNote=c=>`<article class="passage-comment" data-comment-id="${c.id}"><div class="note-person"><strong>${esc(c.user.name)}</strong><span class="pill">${c.visibility==='private'?'나만 보기':'친구 공개'}</span><time>${esc(new Date(c.created_at).toLocaleString('ko-KR'))}</time></div><p>${esc(c.text)}</p>${c.user.id===user.id?`<div class="note-actions">${btn('수정','edit',c.id)}${btn('삭제','delete',c.id)}</div>`:''}</article>`;
+function paintSongComments(){
+ const list=document.querySelector('#song-comment-list');if(!list||!song)return;
+ for(const p of song.passages){
+  const target=document.getElementById('notes-'+p.id);
+  if(target)target.innerHTML=songComments.filter(c=>c.passage_id===p.id).map(inlineNote).join('');
+ }
+ const activeIds=new Set(song.passages.map(p=>p.id));
+ const archived=songComments.filter(c=>!activeIds.has(c.passage_id));
+ list.innerHTML=archived.length?`<h2>이전 가사 버전의 코멘트</h2><p class="small-muted">작성 당시 구절과 함께 보관합니다.</p>${archived.map(note).join('')}`:'';
+ document.querySelector('#song-comment-status').innerHTML=songCommentsPage<songCommentsPages?btn('코멘트 더 불러오기','more-comments'):'';
+}
+async function loadSongComments(sid){
+ const target=document.querySelector('#song-comment-list'),status=document.querySelector('#song-comment-status');
+ if(!target||!status)return;
+ status.textContent='코멘트를 불러오는 중…';
+ try{
+  const r=await api('/songs/'+sid+'/comments?page='+(songCommentsPage+1));
+  if(!target.isConnected||song?.id!==sid)return;
+  songComments=[...new Map([...songComments,...r.items].map(c=>[c.id,c])).values()].sort((a,b)=>b.id-a.id);
+  songCommentsPage++;songCommentsPages=r.pages;paintSongComments();
+ }catch(e){if(status.isConnected)status.innerHTML=`<p role="alert">${esc(e.message)}</p>${btn('코멘트 다시 조회','more-comments')}`;}
+}
+function lyricsHtml(s){return `${s.lyrics_title&&s.lyrics_title!==s.title?`<p class="small-muted">가사 제공처 제목: ${esc(s.lyrics_title)}${s.lyrics_match==='user_confirmed'?' · 사용자 확인 연결':' · 확인된 다른 제목'}</p>`:''}${s.passages.map(p=>`<div class="passage-block"><button class="lyric-line" data-action="passage" data-id="${p.id}" aria-expanded="false" aria-controls="p-${p.id}">${esc(p.text)}</button><div class="passage-comments" id="notes-${p.id}" aria-live="polite"></div><div id="p-${p.id}"></div></div>`).join('')||'<p>가사 없음 — LRCLIB에서 곡명·가수·재생시간이 일치하는 가사를 찾지 못했습니다.</p>'}${s.source_url?`<p class="lyrics-source"><a href="${esc(s.source_url)}" target="_blank" rel="noopener">가사 출처: LRCLIB</a> · 이용자 등록 자료</p>`:''}`;}
 async function loadLyrics(sid,candidateId){
  const target=document.querySelector('#lyrics-content');if(!target)return;
  target.innerHTML='<p role="status">LRCLIB에서 가사를 찾고 있습니다…</p>';
@@ -43,13 +66,14 @@ async function loadLyrics(sid,candidateId){
   if(response.status==='candidates'){
    target.innerHTML=`${updated.passages.length?lyricsHtml(updated):''}<p>같은 가수·앨범에서 재생시간이 비슷한 가사를 찾았습니다. 제목이 달라 자동 연결하지 않았습니다. 내용을 확인해 주세요.</p>${lyricCandidates.map(c=>`<article class="lyric-candidate"><h3>${esc(c.title)}</h3><p>${esc(c.artist)} · ${esc(c.album)} · ${esc(c.duration)}초</p><blockquote>${esc(c.preview)}</blockquote>${btn('후보 확인','choose-lyrics',c.id)}</article>`).join('')}`;
   }else target.innerHTML=lyricsHtml(updated);
+  paintSongComments();
  }catch(e){if(target.isConnected)target.innerHTML=`<p role="alert">가사 조회 실패: ${esc(e.message)}</p>${btn('다시 조회','lyrics',sid)}`;}
 }
 async function detail(id){
  const current=await api('/songs/'+Number(id));song=current;
- main.innerHTML=`<a href="#home">홈으로</a><div class="song-hero"><div><h1>${esc(current.title)}</h1><p>${esc(current.artist)} · ${esc(current.album||'앨범 정보 없음')}</p>${current.provider==='musicbrainz'?`<a class="small-muted" href="https://musicbrainz.org/recording/${esc(current.external_id)}" target="_blank" rel="noopener">음악 정보: MusicBrainz</a>`:''}<div class="song-actions">${btn('곡 저장','save',current.id)}${btn('저장 취소','unsave',current.id)}${btn('음악 기록 추가','record',current.id)}<label>별점 <select id="rating"><option value="">선택</option>${[1,2,3,4,5].map(x=>`<option>${x}</option>`).join('')}</select></label></div></div></div><div class="detail-layout"><section class="panel"><h2>가사와 감상</h2><p class="small-muted">구절을 누르면 작성 창이 열리고, 다시 누르면 닫힙니다.</p><div id="lyrics-content">${lyricsHtml(current)}</div>${btn('가사 다시 조회','lyrics',current.id)}</section><aside class="panel"><h2>평론</h2>${current.reviews.map(r=>`<article><h3>${esc(r.title)}</h3><p>${esc(r.author)} · ${esc(r.source)}</p><p>${esc(r.introduction||'')}</p><a href="${/^https?:\/\//.test(r.url)?esc(r.url):'#'}" rel="noopener" target="_blank">원문</a></article>`).join('')||'등록된 평론 없음'}</aside></div><section id="song-comments"><h2>나와 친구의 코멘트</h2><div id="song-comment-list" role="status">불러오는 중…</div></section>`;
- const commentTarget=document.querySelector('#song-comment-list');
- api('/songs/'+current.id+'/comments').then(r=>{if(commentTarget.isConnected)commentTarget.innerHTML=r.items.map(note).join('')||'<p>첫 감상을 남겨 보세요.</p>';}).catch(e=>{if(commentTarget.isConnected)commentTarget.textContent=e.message;});
+ songComments=[];songCommentsPage=0;songCommentsPages=0;
+ main.innerHTML=`<a href="#home">홈으로</a><div class="song-hero"><div><h1>${esc(current.title)}</h1><p>${esc(current.artist)} · ${esc(current.album||'앨범 정보 없음')}</p>${current.provider==='musicbrainz'?`<a class="small-muted" href="https://musicbrainz.org/recording/${esc(current.external_id)}" target="_blank" rel="noopener">음악 정보: MusicBrainz</a>`:''}<div class="song-actions">${btn('곡 저장','save',current.id)}${btn('저장 취소','unsave',current.id)}${btn('음악 기록 추가','record',current.id)}<label>별점 <select id="rating"><option value="">선택</option>${[1,2,3,4,5].map(x=>`<option>${x}</option>`).join('')}</select></label></div></div></div><div class="detail-layout"><section class="panel"><h2>가사와 감상</h2><p class="small-muted">구절을 누르면 작성 창이 열리고, 다시 누르면 닫힙니다.</p><div id="lyrics-content">${lyricsHtml(current)}</div>${btn('가사 다시 조회','lyrics',current.id)}</section><aside class="panel"><h2>평론</h2>${current.reviews.map(r=>`<article><h3>${esc(r.title)}</h3><p>${esc(r.author)} · ${esc(r.source)}</p><p>${esc(r.introduction||'')}</p><a href="${/^https?:\/\//.test(r.url)?esc(r.url):'#'}" rel="noopener" target="_blank">원문</a></article>`).join('')||'등록된 평론 없음'}</aside></div><section id="song-comments"><div id="song-comment-list"></div><div id="song-comment-status" role="status"></div></section>`;
+ await loadSongComments(current.id);
  if(!current.passages.length)await loadLyrics(current.id);
 }
 async function render(){
@@ -76,6 +100,7 @@ document.addEventListener('click',async e=>{
   else if(action==='about')show('서비스 안내','<p>기록은 SQLite에 저장합니다. 음악 정보는 MusicBrainz, 가사는 LRCLIB 공개 API로 조회합니다. 곡마다 가사 제공 여부가 다릅니다. Gemini는 설정 보류 상태입니다.</p>');
   else if(action==='import'){b.textContent='곡 불러오는 중…';const s=await api('/catalog/import','POST',{external_id:id});location.hash='song/'+s.id;}
   else if(action==='lyrics')await loadLyrics(Number(id));
+  else if(action==='more-comments')await loadSongComments(song.id);
   else if(action==='choose-lyrics'){
    const candidate=lyricCandidates.find(c=>c.id===Number(id));if(!candidate)return;
    show('이 가사를 연결할까요?',`<p>${esc(song.title)} ↔ ${esc(candidate.title)}</p><p>제목이 다릅니다. 같은 곡의 가사인지 확인한 경우에만 연결하세요.</p>${btn('확인하고 연결','confirm-lyrics',candidate.id)}`);
@@ -111,7 +136,16 @@ document.addEventListener('submit',async e=>{
   else if(f.id==='profile'){user=(await api('/profile','PATCH',data)).user;modal.close();await render();}
   else if(f.id==='search'){searchQuery=data.q;searchPage=1;searchScope=document.querySelector('#search-scope').value;document.querySelector('#results-title').textContent='검색 결과';await searchSongs();}
   else if(f.id==='users')document.querySelector('#results').innerHTML=(await api('/users?q='+encodeURIComponent(data.q))).items.map(u=>`<div class="person-row">${esc(u.name)} @${esc(u.username)} ${btn('친구 요청','request',u.id)}</div>`).join('')||'검색 결과 없음';
-  else if(f.id==='comment'){await api('/comments','POST',{...data,passage_id:Number(f.dataset.id)});await render();}
+  else if(f.id==='comment'){
+   const created=await api('/comments','POST',{...data,passage_id:Number(f.dataset.id)});
+   if(f.isConnected&&song?.id===created.song_id){
+    songComments=[created,...songComments.filter(c=>c.id!==created.id)];
+    f.remove();
+    document.querySelector(`[data-action="passage"][data-id="${created.passage_id}"]`)?.setAttribute('aria-expanded','false');
+    paintSongComments();
+    document.getElementById('notes-'+created.passage_id)?.scrollIntoView({block:'nearest',behavior:'smooth'});
+   }
+  }
   else if(f.id==='edit'){await api('/comments/'+f.dataset.id,'PATCH',data);modal.close();await render();}
  }catch(err){message(err);}finally{b.disabled=false;}
 });

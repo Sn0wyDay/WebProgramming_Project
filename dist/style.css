@@ -51,3 +51,11 @@ form.search-box>.button{flex:0 0 auto;margin:0;white-space:nowrap;min-height:40p
 .song-card.panel .button{margin-top:16px}.song-card.panel{min-width:0;overflow-wrap:anywhere}
 .lyric-candidate{padding:18px 0;border-top:1px solid var(--line);margin-top:16px}
 .lyric-candidate blockquote{white-space:pre-line;color:var(--muted);font-size:14px}
+.passage-comments:not(:empty){margin:0 10px 18px 22px}
+.passage-comment{padding:16px 18px;margin-top:10px;border:1px solid var(--line);border-left:3px solid #a6bc91;border-radius:10px;background:#f7f9f2;overflow-wrap:anywhere}
+.passage-comment .note-person{gap:8px;flex-wrap:wrap;font-size:12px}
+.passage-comment time{font-size:11px;color:var(--muted)}
+.passage-comment>p{white-space:pre-wrap;line-height:1.8;margin:10px 0}
+.passage-comment .note-actions{display:flex;justify-content:flex-end;gap:8px}
+.passage-comment .button{padding:4px 10px;min-height:30px;font-size:12px}
+@media(max-width:480px){.passage-comments:not(:empty){margin-left:8px}.passage-comment{padding:12px}}
