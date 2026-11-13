@@ -26,6 +26,7 @@ class Song(db.Model):
     external_id = db.Column(db.String(100), nullable=False)
     title = db.Column(db.String(255), nullable=False)
     artist = db.Column(db.String(255), nullable=False)
+    duration_ms = db.Column(db.Integer)
     album_id = db.Column(db.Integer, db.ForeignKey('album.id'))
     __table_args__ = (db.UniqueConstraint('provider', 'external_id'),)
 
@@ -35,6 +36,8 @@ class LyricVersion(db.Model):
     provider = db.Column(db.String(32), nullable=False)
     digest = db.Column(db.String(64), nullable=False)
     source_url = db.Column(db.Text, nullable=False)
+    matched_title = db.Column(db.String(255))
+    match_method = db.Column(db.String(32))
     __table_args__ = (db.UniqueConstraint('song_id', 'provider', 'digest'),)
 
 class Passage(db.Model):

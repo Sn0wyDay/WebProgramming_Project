@@ -38,3 +38,16 @@ body{background:var(--paper)}
 #toast{background:var(--accent-dark)}
 .cover-wrap img,.song-hero img,.saved-note-top img,.feed-song img,.add-result img,.recommend-list-item img,.review-image,.article-cover{filter:grayscale(1) sepia(.8) hue-rotate(60deg) saturate(.65)}
 @media(max-width:700px){.site-header{background:#fff;backdrop-filter:none}.site-header .nav-link.active{color:var(--accent)}.site-header .nav-link.active .icon{fill:#e7efde;stroke:var(--accent)}}
+
+/* Search fields share the row with their submit button. */
+form.search-box{width:100%;height:auto;min-height:56px;padding:6px 8px 6px 16px;gap:12px}
+form.search-box>input{width:0;flex:1 1 0;min-width:0;height:40px;padding:0}
+form.search-box>.button{flex:0 0 auto;margin:0;white-space:nowrap;min-height:40px;padding:8px 18px}
+@media(max-width:480px){form.search-box{gap:8px;padding-left:12px}form.search-box>.button{padding:8px 12px}}
+.search-options{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.search-pages,.song-actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:18px 0}
+#results-title{margin:24px 0 16px}#song-comments{margin-top:28px}
+#song-comments h2{margin-bottom:16px}.song-card.panel small{display:block;color:var(--muted);margin-top:10px}
+.song-card.panel .button{margin-top:16px}.song-card.panel{min-width:0;overflow-wrap:anywhere}
+.lyric-candidate{padding:18px 0;border-top:1px solid var(--line);margin-top:16px}
+.lyric-candidate blockquote{white-space:pre-line;color:var(--muted);font-size:14px}

@@ -32,8 +32,8 @@ def register():
     username = str(data.get('username', '')).strip().lower()
     name = str(data.get('name', '')).strip()
     password = data.get('password', '')
-    if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email) or len(email)>254 or not re.fullmatch(r'[a-z0-9_]{3,32}', username) or not 1<=len(name)<=40 or not isinstance(password,str) or not 12<=len(password)<=128:
-        return jsonify(error='이메일, 아이디(영문·숫자·밑줄 3~32자), 이름(1~40자), 비밀번호(12~128자)를 확인하세요.'),400
+    if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email) or len(email)>254 or not re.fullmatch(r'[a-z0-9_]{3,32}', username) or not 1<=len(name)<=40 or not isinstance(password,str) or not 8<=len(password)<=128:
+        return jsonify(error='이메일, 아이디(영문·숫자·밑줄 3~32자), 이름(1~40자), 비밀번호(8~128자)를 확인하세요.'),400
     user = User(email=email, username=username, name=name, password_hash=generate_password_hash(password))
     db.session.add(user)
     try:
@@ -75,7 +75,7 @@ def profile():
     db.session.commit()
     return jsonify(user=public(user))
 
-from .models import Song, Passage, LyricVersion, Comment, UserSong, Friendship, Review, ReviewSource
+from .models import Album, Song, Passage, LyricVersion, Comment, UserSong, Friendship, Review, ReviewSource
 from flask import abort
 
 def body():
@@ -151,7 +151,7 @@ def songs():
     stmt=db.select(Song)
     if q: stmt=stmt.where(db.or_(Song.title.contains(q,autoescape=True),Song.artist.contains(q,autoescape=True),Song.id.in_(db.select(LyricVersion.song_id).join(Passage,Passage.version_id==LyricVersion.id).where(Passage.text.contains(q,autoescape=True)))))
     result=page_query(stmt.order_by(Song.id))
-    return jsonify(items=[dict(id=s.id,title=s.title,artist=s.artist) for s in result.items],pages=result.pages,notice='로컬 DB 검색입니다. 외부 음악 검색 설정은 보류되었습니다.')
+    return jsonify(items=[dict(id=s.id,title=s.title,artist=s.artist) for s in result.items],pages=result.pages,notice='저장된 곡·가수·가사 검색입니다.')
 
 @api.get('/songs/<int:sid>')
 @login_required
@@ -161,7 +161,8 @@ def song_detail(sid):
     version=versions[0] if versions else None
     passages=db.session.scalars(db.select(Passage).where(Passage.version_id==version.id).order_by(Passage.position)).all() if version else []
     reviews=db.session.scalars(db.select(Review).where(Review.song_id==sid)).all()
-    return jsonify(id=s.id,title=s.title,artist=s.artist,lyrics_status='available' if passages else 'missing',passages=[dict(id=p.id,text=p.text,version_id=p.version_id) for p in passages],source_url=version.source_url if version else None,reviews=[dict(title=r.title,author=r.author,url=r.url,source=db.session.get(ReviewSource,r.source_id).name,introduction=r.introduction) for r in reviews])
+    album=db.session.get(Album,s.album_id) if s.album_id else None
+    return jsonify(id=s.id,title=s.title,artist=s.artist,album=album.title if album else None,provider=s.provider,external_id=s.external_id,lyrics_status='available' if passages else 'missing',passages=[dict(id=p.id,text=p.text,version_id=p.version_id) for p in passages],source_url=version.source_url if version else None,lyrics_title=version.matched_title if version else None,lyrics_match=version.match_method if version else None,reviews=[dict(title=r.title,author=r.author,url=r.url,source=db.session.get(ReviewSource,r.source_id).name,introduction=r.introduction) for r in reviews])
 
 @api.route('/comments',methods=['GET','POST'])
 @login_required
@@ -223,3 +224,56 @@ def record_song(sid):
 @login_required
 def recommend():
     return jsonify(error='Gemini 설정이 보류되었습니다. 실제 AI 연동은 검증되지 않았습니다.',code='configuration_required'),503
+
+
+from .providers import musicbrainz
+from .providers.http import ProviderError
+from .music import import_song, fetch_lyrics, lyric_candidates
+
+@api.errorhandler(ProviderError)
+def provider_error(error):
+    return jsonify(error=str(error),code=error.code),error.status
+
+@api.get('/catalog/search')
+@login_required
+def catalog_search():
+    query=request.args.get('q','').strip()
+    try: page=int(request.args.get('page',1))
+    except ValueError: abort(400)
+    if not 1<=len(query)<=100 or not 1<=page<=100: abort(400)
+    return jsonify(musicbrainz.search(query,page))
+
+@api.post('/catalog/import')
+@login_required
+def catalog_import():
+    data=body()
+    external_id=data.get('external_id')
+    if not isinstance(external_id,str) or not musicbrainz.MBID.fullmatch(external_id): abort(400)
+    song=import_song(external_id)
+    return jsonify(id=song.id)
+
+@api.post('/songs/<int:sid>/lyrics')
+@login_required
+def song_lyrics(sid):
+    song=db.get_or_404(Song,sid)
+    data=body()
+    candidate=data.get('candidate_id')
+    if candidate is not None and (type(candidate) is not int or candidate<=0): abort(400)
+    version=fetch_lyrics(song,candidate_id=candidate)
+    if version:
+        return jsonify(status='available',version_id=version.id)
+    candidates=lyric_candidates(song)
+    return jsonify(status='candidates' if candidates else 'missing',candidates=[dict(id=int(c['external_id']),title=c['title'],artist=c['artist'],album=c['album'],duration=c['duration'],preview='\n'.join(c['text'].splitlines()[:2])) for c in candidates])
+
+@api.get('/songs/<int:sid>/comments')
+@login_required
+def song_comments(sid):
+    db.get_or_404(Song,sid)
+    uid=session['user_id']
+    friend_ids=db.select(Friendship.high_id).where(Friendship.low_id==uid,Friendship.accepted.is_(True)).union(db.select(Friendship.low_id).where(Friendship.high_id==uid,Friendship.accepted.is_(True)))
+    stmt=(db.select(Comment).join(Passage,Comment.passage_id==Passage.id)
+          .join(LyricVersion,Passage.version_id==LyricVersion.id)
+          .where(LyricVersion.song_id==sid,db.or_(Comment.user_id==uid,db.and_(Comment.visibility=='friends',Comment.user_id.in_(friend_ids))))
+          .order_by(Comment.id.desc()))
+    result=page_query(stmt)
+    return jsonify(items=[comment_json(c) for c in result.items],pages=result.pages)

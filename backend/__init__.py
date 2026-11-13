@@ -1,4 +1,5 @@
 import os
+import secrets
 from pathlib import Path
 from datetime import timedelta
 from flask import Flask, jsonify
@@ -23,8 +24,26 @@ def create_app(config=None):
         PERMANENT_SESSION_LIFETIME=timedelta(hours=12), MAX_CONTENT_LENGTH=16384)
     if config:
         app.config.update(config)
-    if not app.config['SECRET_KEY'] or not app.config['SQLALCHEMY_DATABASE_URI']:
-        raise RuntimeError('SECRET_KEY와 DATABASE_URL을 설정하세요.')
+    production = os.getenv('APP_ENV') == 'production'
+    if production and (not app.config['SECRET_KEY'] or not app.config['SQLALCHEMY_DATABASE_URI']):
+        raise RuntimeError('운영 환경에서는 SECRET_KEY와 DATABASE_URL을 설정하세요.')
+    if not app.config['SQLALCHEMY_DATABASE_URI']:
+        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///preview.db'
+    if not app.config['SECRET_KEY']:
+        # Keep the local signing key across restarts; never ship it in Git.
+        instance = Path(app.instance_path)
+        instance.mkdir(parents=True, exist_ok=True)
+        key_path = instance / '.secret-key'
+        try:
+            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, 'w') as key_file:
+                key_file.write(secrets.token_hex(32))
+        app.config['SECRET_KEY'] = key_path.read_text().strip()
+        if not app.config['SECRET_KEY']:
+            raise RuntimeError('로컬 세션 키 파일이 비어 있습니다.')
     db.init_app(app)
     from . import models
     app.config['SESSION_SQLALCHEMY'] = db

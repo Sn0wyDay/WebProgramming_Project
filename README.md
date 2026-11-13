@@ -1,86 +1,137 @@
-# RE:VERSE — Flask 서비스 구현 중
+# RE:VERSE — 가벼운 로컬 팀프로젝트
 
-기존 HTML/CSS 디자인 위에 같은 출처의 Flask JSON API를 연결했습니다.
-사용자 데이터는 SQLAlchemy DB와 서버 저장 세션에 보관하며 localStorage에 저장하지 않습니다.
+Flask 하나에서 HTML/CSS/JavaScript 화면과 JSON API를 함께 제공합니다.
+DB는 Python에 포함된 SQLite를 사용하므로 MySQL·Docker 설치가 필요 없습니다.
 
 ## 실행
 
-Python 3.9 이상 및 MySQL 8 이상을 준비합니다.
+Python 3.9 이상에서 저장소 폴더를 열고 실행합니다.
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+python run.py
 ```
 
-MySQL에서 전용 DB와 사용자 권한을 생성하고 `.env`의 DATABASE_URL을 설정하세요.
-SECRET_KEY에는 충분히 긴 무작위 값을 설정하세요. 실제 `.env`는 커밋하지 않습니다.
+Windows에서는 가상환경 활성화 명령을 `.venv\Scripts\activate`로 바꿉니다.
+[실행 화면](http://127.0.0.1:5001)에 접속합니다.
+처음 실행할 때 DB와 세션 키를 생성하고, 실행할 때마다 필요한 마이그레이션을 적용합니다.
+`.env` 작성이나 API 키 입력 없이 실행할 수 있습니다. 옵션 예시는 `.env.example`에 있습니다.
 
-```sql
-CREATE DATABASE reverse CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 're'@'localhost' IDENTIFIED BY 'replace-with-your-password';
-GRANT ALL PRIVILEGES ON reverse.* TO 're'@'localhost';
-```
+## 로컬 저장
+
+- `instance/preview.db`: 계정, 코멘트, 별점, 저장한 곡, 친구 관계, 로그인 세션
+- `instance/.secret-key`: 서버 재시작 후에도 유지하는 로컬 세션 키
+- 두 파일은 Git에서 제외됩니다. DB 파일을 지우면 기록이 사라집니다.
+- 신규 계정은 빈 상태로 시작합니다. 기존 가상 곡이나 친구를 자동 등록하지 않습니다.
+- 다른 브라우저에서도 같은 서버에 접속하면 서로 다른 계정으로 요청·수락할 수 있습니다.
+- 비밀번호는 해시로 저장하며 8~128자입니다. CSRF와 서버 권한 검사는 유지합니다.
+
+## 현재 기능
+
+- 회원가입·로그인·로그아웃·프로필 수정
+- 실제 가입 사용자 검색, 친구 요청·취소·수락·거절·해제
+- 외부 MusicBrainz 곡·가수 검색, 곡 선택 후 중복 없이 DB 저장
+- LRCLIB 실제 가사 조회·구절 저장, 출처 링크
+- 로컬 DB 곡명·가수명·확보한 가사 검색, 곡 상세
+- 구절 코멘트 작성·수정·삭제, 나만 보기·친구 공개 권한
+- 계정별 별점·음악 기록·곡 저장, 기록 검색
+- 불변 가사 버전·구절 및 곡·평론 관계 모델, Alembic 마이그레이션
+
+## 음악·가사 연결
+
+별도 가입·키·추가 패키지 없이 Flask에서 공개 API를 호출합니다.
+
+| 역할 | 오픈소스 및 문서 |
+| --- | --- |
+| 곡·가수·앨범 정보 | [MusicBrainz 서버](https://github.com/metabrainz/musicbrainz-server), [API](https://musicbrainz.org/doc/MusicBrainz_API) |
+| 실제 가사 | [LRCLIB 서버](https://github.com/tranxuanthang/lrclib), [API](https://lrclib.net/docs) |
+
+홈에서 **외부 음악**으로 곡명·가수명을 검색하고 **가사와 기록 보기**를 누릅니다.
+서버가 MusicBrainz ID로 메타데이터를 다시 확인한 뒤 SQLite에 저장합니다.
+가사는 LRCLIB에서 곡명·가수·가능한 경우 재생시간을 대조합니다.
+외부 검색은 20개씩 이전·다음 페이지로 탐색할 수 있습니다.
+**저장된 음악·가사**로 범위를 바꾸면 이미 확보한 자료의 키워드를 검색합니다.
+
+등록된 가사가 없는 곡이나 일치 여부가 불분명한 곡은 가사 없음으로 표시합니다.
+가사가 없는 상태와 제공처 장애·시간 초과·호출 제한은 구분합니다.
+곡 검색이 비어 있으면 MusicBrainz의 가수 별칭을 조회해 가수 ID로 다시 검색합니다.
+예: 리도어 → Redoor. 임의 번역이나 특정 가수의 이름 하드코딩은 사용하지 않습니다.
+가사도 제공처에서 확인한 별칭의 한글·영문 병기를 대조합니다.
+다만 제공처에 별칭이 없거나 곡의 한글 제목 자체가 등록되지 않았다면 누락될 수 있습니다.
+LRCLIB는 이용자 등록 자료이므로 정확성이나 모든 한국어 곡의 제공을 보장하지 않습니다.
+
+요청에 프로젝트 User-Agent를 명시하고, MusicBrainz는 1.05초 간격,
+LRCLIB는 0.5초 간격으로 순차 요청합니다. 제공처별 8초 시간 제한,
+최대 128건·10분 메모리 캐시, 동일 요청 재사용, 429/503 대기 처리가 있습니다.
+이 제한은 로컬 단일 서버 프로세스 기준이며 별도 Redis나 작업 서버는 사용하지 않습니다.
+가사 다시 조회는 새 버전을 추가하며 기존 구절·코멘트 연결은 수정하지 않습니다.
+
+오픈소스 서버의 코드 라이선스와 음악·가사 콘텐츠의 이용 권한은 별개입니다.
+출처 링크를 표시하며, 콘텐츠를 별도의 공개 데이터셋으로 배포하지 않습니다.
+크롤링·음원 스트리밍·다운로드는 구현하지 않습니다.
+앨범 이름은 표시하지만 앨범 이미지 연동은 아직 없습니다.
+Gemini 추천과 실제 평론 수집은 계속 보류 상태입니다.
+
+## 개발 및 테스트
 
 ```sh
-flask --app backend:create_app db upgrade
-flask --app backend:create_app run --port 5001
-```
-
-http://127.0.0.1:5001 에 접속합니다. 신규 계정은 빈 상태로 시작합니다.
-운영 환경에서는 APP_ENV=production, HTTPS 및 운영 WSGI 서버를 사용해야 합니다.
-현재 운영 배포 준비가 완료된 상태는 아닙니다. 로그인 호출 제한 등 추가 보강이 필요합니다.
-
-## 구현
-
-- 회원가입, 로그인·로그아웃, 세션 조회, 프로필 수정
-- 비밀번호 해시, SQLAlchemy 서버 세션, HttpOnly/SameSite 쿠키, CSRF
-- 사용자 검색, 친구 요청·취소·수락·거절·해제
-- DB 곡·가수·확보한 가사 검색, 곡 상세
-- 구절 코멘트 작성·수정·삭제, 공개 범위, 서버 권한 검사
-- 별점·곡 기록·저장, 나의 기록 화면
-- 외부 곡 ID·가사 버전·구절·평론 관계 모델과 초기 Alembic 마이그레이션
-
-가사 버전과 구절은 별도 테이블입니다. 기존 버전 변경 없이 새 버전을 추가해야 합니다.
-현재 외부 자료 수집·관리 기능은 없습니다. 따라서 신규 DB에는 음악이 없습니다.
-평론은 실제 자료를 DB에 등록한 경우만 표시하며, 기존 가상 자료는 불러오지 않습니다.
-
-## API
-
-`GET /api/session`에서 CSRF 토큰을 받고 변경 요청에 `X-CSRFToken` 헤더를 전달합니다.
-
-- POST /api/register, /api/login, /api/logout
-- PATCH /api/profile
-- GET /api/users?q=검색어&page=1
-- GET /api/friends
-- POST/PATCH/DELETE /api/friends/<사용자ID>
-- GET /api/songs?q=검색어&page=1, /api/songs/<곡ID>
-- GET/POST /api/comments
-- GET/PATCH/DELETE /api/comments/<코멘트ID>
-- GET /api/comments?scope=friends&user_id=사용자ID&page=1
-- GET /api/records?page=1, PUT /api/records/<곡ID>
-- POST /api/recommendations: 설정 보류 오류(503)
-
-목록 API는 페이지당 20개입니다. 화면 페이지 이동 UI는 아직 구현되지 않았습니다.
-
-## 검증과 제한
-
-```sh
+pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-SQLite 임시 DB에서 두 독립 클라이언트의 가입·로그인, 비공개 조회 차단,
-타인 삭제 차단, 친구 수락 권한·중복 방지, 친구 해제 후 공유 차단,
-별점·저장 계정 분리, CSRF, 로그아웃·재로그인 유지 테스트가 통과했습니다.
-테스트 가사와 곡은 테스트 DB에만 생성됩니다. 외부 연동 검증이 아닙니다.
+테스트 전용 SQLite DB와 가사 구절을 사용합니다. 두 계정의 비공개 접근 차단,
+타인 삭제 차단, 친구 수락 권한·중복 방지, 해제 후 공유 차단,
+별점·저장 계정 분리, CSRF, 재로그인 유지와 비밀번호 8자 기준을 검사합니다.
+이 자동화 테스트의 외부 응답은 모의 응답입니다. 실제 연동 검증은 아래와 별개입니다.
 
-현재 MySQL 서버와 Docker 엔진이 실행되어 있지 않아 실제 MySQL 검증은 못 했습니다.
-마이그레이션은 SQLite 기준으로 생성했으며 MySQL 적용 검증이 필요합니다.
-브라우저 두 개·모바일 시연도 아직 검증되지 않았습니다.
+직접 마이그레이션하려면 `flask --app backend:create_app db upgrade`를 실행합니다.
+실제 외부 연동을 임시 DB에서 다시 확인하려면 인터넷 연결 상태에서 실행하세요.
 
-외부 제공처·키 설정은 사용자 요청으로 보류했습니다. 실제 음악 검색,
-가사 수집, Gemini 후보 추천, 실제 평론 수집은 미구현입니다.
-기존 UI의 일부 세부 흐름(앨범 이미지·전체 목록 페이지 이동·곡 상세의 기존 코멘트 표시 등)은
-추가 연결이 필요합니다. 최종 완료 상태로 보고하지 않습니다.
-원격 저장소 반영 및 배포는 하지 않았습니다.
+```sh
+python -m scripts.verify_music
+```
+
+2026-11-13 실제 응답 검증: 밤편지 / IU 검색·가져오기·중복 방지,
+LRCLIB 한국어 가사 27개 구절 저장과 코멘트 생성에 성공했습니다.
+아이유 및 Dynamite BTS 검색도 결과를 반환했습니다. 가사 전문을 테스트 로그에 남기지 않습니다.
+사용 중인 브라우저에서도 실제 곡 상세·가사·구절 입력창 표시를 확인했습니다.
+전체 두 브라우저·모바일 시연은 아직 검증하지 않았습니다.
+기록·친구 목록의 화면 페이지 이동은 추가 작업이 남았습니다.
+
+이 구성은 로컬 수업 시연용입니다. 외부 배포 시에는 별도 운영 설정이 필요합니다.
+
+## 추가 API
+
+- `GET /api/catalog/search?q=밤편지&page=1`: 외부 음악 검색
+- `POST /api/catalog/import`: `{ "external_id": "MusicBrainz recording UUID" }`
+- `POST /api/songs/<곡ID>/lyrics`: 실제 가사 조회 및 불변 버전 저장
+- `GET /api/songs/<곡ID>/comments`: 현재 권한으로 볼 수 있는 구절 코멘트
+
+외부 실패는 `provider_error`, `provider_timeout`, `provider_rate_limited`,
+`provider_busy` 코드로 반환합니다. AI 추천 성공이나 빈 검색 결과로 위장하지 않습니다.
+
+## 한글·영문 곡명 연결
+
+1. 원래 곡명과 가수로 LRCLIB를 검색합니다.
+2. 검색되지 않으면 같은 MusicBrainz 곡 ID의 별칭과, 출처를 확인해 등록한 다른 제목을 사용합니다.
+3. 다른 제목으로 연결할 때에는 가수·앨범·재생시간(±2초)이 일치해야 합니다.
+4. 확인된 다른 제목이 없으면 같은 가수·앨범·재생시간의 가사를 **후보**로만 표시합니다.
+   후보가 하나여도 자동 연결하지 않습니다. 제목과 미리보기를 확인하고 연결 버튼을 눌러야 저장합니다.
+
+`backend/data/title_aliases.json`은 공식 자료에서 확인한 제목 대응을 기록하는 작은 파일입니다.
+현재 우리아픈이야기 ↔ Shadow of You 한 건을 등록했습니다.
+[공식 음원 페이지의 한글·영문 병기](https://www.joox.com/th/single/OIMUuDWt54qR4YwTDSh5rA%3D%3D)를 근거로,
+MusicBrainz 곡 ID·원래 제목·가수·앨범·재생시간에 한정해 적용합니다.
+임의 번역이나 재생시간만으로 모든 곡의 제목을 추측하지 않습니다.
+다른 제목으로 연결한 사실과 사용자 확인 여부는 가사 화면에 표시하고 DB에 남깁니다.
+기존 가사 버전·구절 및 연결된 코멘트는 변경하지 않습니다.
+
+`POST /api/songs/<곡ID>/lyrics`는 후보가 있으면 `status: candidates`와 후보 목록을 반환합니다.
+사용자 확인 후 같은 API에 `{ "candidate_id": 123 }`을 보내면 서버가 후보 조건을 재검사합니다.
+브라우저가 임의의 가사 본문이나 후보에 없는 ID를 저장하도록 허용하지 않습니다.
+후보 연결은 곡의 공통 가사 버전을 추가하며, 코멘트의 공개 범위·소유권을 변경하지 않습니다.
+
+제목 매칭 보완 후 자동화 테스트는 13개가 통과했습니다.
+실제 로컬 DB에서 우리아픈이야기를 Shadow of You의 한국어 가사 20개 구절에 연결했습니다.
