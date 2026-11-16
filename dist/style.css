@@ -59,3 +59,52 @@ form.search-box>.button{flex:0 0 auto;margin:0;white-space:nowrap;min-height:40p
 .passage-comment .note-actions{display:flex;justify-content:flex-end;gap:8px}
 .passage-comment .button{padding:4px 10px;min-height:30px;font-size:12px}
 @media(max-width:480px){.passage-comments:not(:empty){margin-left:8px}.passage-comment{padding:12px}}
+
+/* 내 계정: 헤더 버튼과 #account 페이지 */
+.user-button{border-radius:999px;padding:4px 14px 4px 4px;transition:background .15s,color .15s}
+.user-button:hover,.user-button.active{background:var(--accent-soft);color:var(--accent-dark)}
+.user-button .avatar{font-weight:600}
+.user-button.active .avatar{background:var(--accent-dark);color:#fff}
+.account-page{display:grid;gap:20px}
+.account-hero{display:flex;align-items:center;gap:22px;padding:28px 30px;background:var(--accent-soft);border:1px solid #dfe8d4;border-radius:18px}
+.account-avatar{width:76px;height:76px;font-size:28px;font-weight:600;background:#fff;color:var(--accent-dark);box-shadow:0 0 0 4px #dfe8d4}
+.account-identity{min-width:0;flex:1}
+.account-identity .eyebrow{margin-bottom:4px;color:var(--accent)}
+.account-identity h1{font-size:28px;line-height:1.3;letter-spacing:-1px;overflow-wrap:anywhere}
+.account-identity p{font-size:14px;color:var(--muted);margin-top:2px}
+.account-hero>.button{flex-shrink:0}
+.account-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.account-stat{display:flex;flex-direction:column;gap:6px;padding:18px 20px;background:#fff;border:1px solid var(--line);border-radius:14px;transition:border-color .15s,transform .15s}
+.account-stat:hover{border-color:#c7d9b5;transform:translateY(-1px)}
+.account-stat>span{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)}
+.account-stat .icon{width:16px;height:16px;color:var(--accent)}
+.account-stat strong{font-size:26px;font-weight:600;letter-spacing:-1px;line-height:1.2;color:var(--ink)}
+.account-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
+.account-column{display:grid;gap:20px}
+.account-grid .panel+.panel{margin-top:0}
+.account-section .panel-header{margin-bottom:16px}
+.account-field-row{display:flex;gap:8px}
+.account-field-row .field{flex:1;min-width:0}
+.account-field-row .button{flex-shrink:0}
+.account-form .small-muted{margin-top:8px}
+.account-info{margin:20px 0 0;border-top:1px solid var(--line)}
+.account-info div,.account-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0}
+.account-info div{padding-bottom:0}
+.account-row+.account-row{border-top:1px solid var(--line)}
+.account-section .panel-header+.account-row{padding-top:0}
+.account-info dt{font-size:13px;color:var(--muted)}
+.account-info dd{margin:0;font-size:14px;font-weight:500}
+.account-row strong{display:block;font-size:14px;font-weight:600}
+.account-row small{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.account-row .button{flex-shrink:0}
+a.account-row:hover strong{color:var(--accent)}
+.account-note{display:block;padding:14px 0;border-top:1px solid var(--line)}
+.account-note:first-of-type{border-top:0;padding-top:0}
+.account-note blockquote{margin:0 0 6px;padding-left:10px;border-left:2px solid #c6d6b6;font-size:13px;color:var(--accent);display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.account-note p{font-size:14px;line-height:1.7;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.account-note:hover p{color:var(--accent-dark)}
+.account-note-meta{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:11px;color:var(--muted)}
+.account-empty{padding:24px 10px;text-align:center;color:var(--muted);font-size:14px;line-height:1.8}
+.account-empty .button{margin-top:14px}
+@media(max-width:1000px){.account-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.user-button{padding:0}.user-button:hover,.user-button.active{background:none}}
+@media(max-width:700px){.account-hero{flex-wrap:wrap;padding:22px;gap:16px}.account-avatar{width:60px;height:60px;font-size:22px}.account-identity h1{font-size:23px}.account-hero>.button{width:100%}.account-grid{grid-template-columns:1fr}.account-stat{padding:14px 16px}.account-stat strong{font-size:22px}}

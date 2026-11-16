@@ -20,7 +20,44 @@ function auth(signup=false){main.innerHTML=`<h1>${signup?'회원가입':'다시 
 const card=s=>`<article class="song-card panel"><a class="song-title" href="#song/${s.id}">${esc(s.title)}</a><p>${esc(s.artist)}</p></article>`;
 const externalCard=s=>`<article class="song-card panel"><h3>${esc(s.title)}</h3><p>${esc(s.artist)}</p><p class="small-muted">${esc(s.album||'앨범 정보 없음')}</p>${btn('가사와 기록 보기','import',s.external_id)}<small>MusicBrainz</small></article>`;
 const note=c=>`<article class="saved-note"><strong>${esc(c.user.name)}</strong><time> · ${esc(new Date(c.created_at).toLocaleString('ko-KR'))}</time><span class="pill">${c.visibility==='private'?'나만 보기':'친구 공개'}</span><blockquote>${esc(c.quote)}</blockquote><p>${esc(c.text)}</p><a href="#song/${c.song_id}">곡 보기</a>${c.user.id===user.id?btn('수정','edit',c.id)+btn('삭제','delete',c.id):''}</article>`;
-function nav(){document.querySelector('#profile-name').textContent=user?.name||'로그인';document.querySelector('#navigation').innerHTML=[['home','홈'],['friends','친구'],['ai','AI 추천'],['records','나의 기록']].map(([a,b])=>`<a class="nav-link" href="#${a}">${b}</a>`).join('');}
+const PAGE_SIZE=20;
+const initial=name=>Array.from(String(name??'').trim())[0]||'나';
+function toast(text){const t=document.querySelector('#toast');t.textContent=text;t.classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.classList.remove('visible'),2400);}
+async function commentSummary(){
+ const first=await api('/comments'),recent=first.items.slice(0,3);
+ if(first.pages<=1)return {total:first.items.length,recent};
+ const last=await api('/comments?page='+first.pages);
+ return {total:(first.pages-1)*PAGE_SIZE+last.items.length,recent};
+}
+async function allRecords(){
+ const first=await api('/records');
+ const rest=await Promise.all(Array.from({length:Math.max(0,first.pages-1)},(_,i)=>api('/records?page='+(i+2))));
+ return [first,...rest].flatMap(r=>r.items);
+}
+const accountNote=c=>`<a class="account-note" href="#song/${c.song_id}"><blockquote>${esc(c.quote)}</blockquote><p>${esc(c.text)}</p><span class="account-note-meta"><span class="pill">${c.visibility==='private'?'나만 보기':'친구 공개'}</span><time>${esc(new Date(c.created_at).toLocaleDateString('ko-KR'))}</time></span></a>`;
+async function account(){
+ const [c,r,f]=await Promise.allSettled([commentSummary(),allRecords(),api('/friends')]);
+ const comments=c.value,records=r.value,friends=f.value?.items;
+ const incoming=friends?.filter(x=>x.status==='incoming').length||0;
+ const stats=[['코멘트',comments?.total,'#records','comment'],['저장한 곡',records?.filter(x=>x.saved).length,'#records','bookmark'],['기록한 음악',records?.filter(x=>x.recorded).length,'#records','headphones'],['친구',friends?.filter(x=>x.status==='accepted').length,'#friends','friends']];
+ main.innerHTML=`<div class="account-page">
+ <section class="account-hero" aria-labelledby="account-title"><span class="avatar account-avatar" aria-hidden="true">${esc(initial(user.name))}</span><div class="account-identity"><div class="eyebrow">MY ACCOUNT</div><h1 id="account-title">${esc(user.name)}</h1><p>@${esc(user.username)}</p></div><a class="button outline" href="#records">나의 기록 보기</a></section>
+ <div class="account-stats">${stats.map(([label,value,href,ic])=>`<a class="account-stat" href="${href}"><span>${icon(ic)}${label}</span><strong>${value===undefined?'—':value}</strong></a>`).join('')}</div>
+ <div class="account-grid"><div class="account-column">
+  <section class="panel account-section" aria-labelledby="account-profile-title"><div class="panel-header"><h2 id="account-profile-title">프로필</h2></div><form id="profile" class="account-form"><label class="form-label" for="account-name">표시 이름</label><div class="account-field-row"><input class="field" id="account-name" name="name" value="${esc(user.name)}" maxlength="40" autocomplete="nickname" required><button class="button dark">저장</button></div><p class="small-muted">친구 목록과 코멘트에 보이는 이름이에요. 1~40자로 입력하세요.</p></form><dl class="account-info"><div><dt>아이디</dt><dd>@${esc(user.username)}</dd></div></dl></section>
+  <section class="panel account-section" aria-labelledby="account-settings-title"><div class="panel-header"><h2 id="account-settings-title">계정</h2></div>${incoming?`<a class="account-row" href="#friends"><span><strong>받은 친구 요청</strong><small>친구 화면에서 수락하거나 거절할 수 있어요.</small></span><span class="pill">${incoming}건</span></a>`:''}<div class="account-row"><span><strong>로그아웃</strong><small>이 브라우저에서 로그인 상태를 종료해요.</small></span><button class="button danger small" data-action="logout">로그아웃</button></div></section>
+ </div>
+ <section class="panel account-section" aria-labelledby="account-notes-title"><div class="panel-header"><h2 id="account-notes-title">최근 남긴 코멘트</h2>${comments?.total?'<a class="text-button" href="#records">전체 보기</a>':''}</div>${comments===undefined?'<p class="account-empty" role="alert">코멘트를 불러오지 못했어요.</p>':comments.recent.map(accountNote).join('')||'<div class="account-empty"><p>아직 남긴 코멘트가 없어요.<br>마음에 닿은 가사 구절에 첫 감상을 남겨 보세요.</p><a class="button outline" href="#home">음악 찾으러 가기</a></div>'}</section>
+ </div></div>`;
+}
+function nav(){
+ const userButton=document.querySelector('.user-button'),onAccount=location.hash==='#account';
+ document.querySelector('#profile-name').textContent=user?.name||'로그인';
+ userButton.querySelector('.avatar').textContent=user?initial(user.name):'나';
+ userButton.setAttribute('aria-label',user?`내 계정: ${user.name}`:'로그인');
+ userButton.classList.toggle('active',Boolean(user)&&onAccount);
+ if(user&&onAccount)userButton.setAttribute('aria-current','page');else userButton.removeAttribute('aria-current');
+ document.querySelector('#navigation').innerHTML=[['home','홈'],['friends','친구'],['ai','AI 추천'],['records','나의 기록']].map(([a,b])=>`<a class="nav-link" href="#${a}">${b}</a>`).join('');}
 async function searchSongs(){
  const target=document.querySelector('#results');
  target.innerHTML='<p role="status">음악 검색 중…</p>';
@@ -79,6 +116,7 @@ async function detail(id){
 async function render(){
  nav();if(!user)return auth();const [route,id]=location.hash.slice(1).split('/');
  if(route==='song')await detail(id);
+ else if(route==='account')await account();
  else if(route==='friends'){
   const r=await api('/friends'),feed=await api('/comments?scope=friends');
   main.innerHTML=`<h1>같은 음악, 다른 이야기.</h1><form id="users" class="search-box">${searchInput('이름 또는 아이디')}<button class="button dark">친구 검색</button></form><div id="results"></div><section class="panel"><h2>친구와 요청</h2>${r.items.map(x=>`<div class="person-row"><span>${esc(x.user.name)} @${esc(x.user.username)} · ${esc(x.status)}</span>${x.status==='incoming'?btn('수락','accept',x.user.id):''}${btn(x.status==='accepted'?'친구 해제':x.status==='incoming'?'거절':'요청 취소','remove',x.user.id)}${x.status==='accepted'?btn('기록 보기','friend-feed',x.user.id):''}</div>`).join('')||'아직 친구가 없습니다.'}</section><h2>공유 코멘트</h2>${feed.items.map(note).join('')||'공유된 코멘트 없음'}`;
@@ -95,7 +133,6 @@ document.addEventListener('click',async e=>{
  try{
   if(action==='close')modal.close();
   else if(action==='register'||action==='login')auth(action==='register');
-  else if(action==='profile'){if(!user)return auth();show('프로필 수정',`<form id="profile">${input('name','표시 이름')}<button class="button dark">저장</button></form>${btn('로그아웃','logout')}`);}
   else if(action==='logout'){await api('/logout','POST');user=null;modal.close();await render();}
   else if(action==='about')show('서비스 안내','<p>기록은 SQLite에 저장합니다. 음악 정보는 MusicBrainz, 가사는 LRCLIB 공개 API로 조회합니다. 곡마다 가사 제공 여부가 다릅니다. Gemini는 설정 보류 상태입니다.</p>');
   else if(action==='import'){b.textContent='곡 불러오는 중…';const s=await api('/catalog/import','POST',{external_id:id});location.hash='song/'+s.id;}
@@ -133,7 +170,7 @@ document.addEventListener('submit',async e=>{
  try{
   if(f.id==='login'){const r=await api('/login','POST',data);user=r.user;csrf=r.csrf_token;await render();}
   else if(f.id==='register'){await api('/register','POST',data);auth();}
-  else if(f.id==='profile'){user=(await api('/profile','PATCH',data)).user;modal.close();await render();}
+  else if(f.id==='profile'){user=(await api('/profile','PATCH',data)).user;await render();toast('이름을 저장했어요.');}
   else if(f.id==='search'){searchQuery=data.q;searchPage=1;searchScope=document.querySelector('#search-scope').value;document.querySelector('#results-title').textContent='검색 결과';await searchSongs();}
   else if(f.id==='users')document.querySelector('#results').innerHTML=(await api('/users?q='+encodeURIComponent(data.q))).items.map(u=>`<div class="person-row">${esc(u.name)} @${esc(u.username)} ${btn('친구 요청','request',u.id)}</div>`).join('')||'검색 결과 없음';
   else if(f.id==='comment'){
