@@ -104,7 +104,12 @@ class JsonClient:
                 until=time.monotonic()+2
                 while True:
                     token,state,delay=store.reserve(self.base)
-                    if token:break
+                    if token:
+                        # A previous client may finish between the cache read
+                        # and acquiring its just-released lease.
+                        latest=self._read(key,store)
+                        if latest and latest['expires']>time.time():report('cache');return latest['value']
+                        break
                     cached=self._read(key,store)
                     if cached and cached['expires']>time.time():report('cache');return cached['value']
                     if state=='cooldown':raise ProviderError('제공처가 혼잡하거나 호출 제한 중입니다. 잠시 뒤 다시 시도하세요.','provider_rate_limited',503,delay)

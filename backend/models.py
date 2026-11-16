@@ -85,6 +85,8 @@ class Review(db.Model):
     author = db.Column(db.String(255), nullable=False)
     url = db.Column(db.String(1000), nullable=False, unique=True)
     introduction = db.Column(db.Text)
+    article_type = db.Column(db.String(16),nullable=False,default='review',server_default='review')
+    __table_args__ = (db.CheckConstraint("article_type IN ('review','selection')"),)
 
 
 class ReviewLink(db.Model):
@@ -92,6 +94,7 @@ class ReviewLink(db.Model):
     song_id = db.Column(db.Integer, db.ForeignKey('song.id'), primary_key=True)
     review_id = db.Column(db.Integer, db.ForeignKey('review.id'), primary_key=True, index=True)
     kind = db.Column(db.String(16), nullable=False)
+    context = db.Column(db.String(500))
     __table_args__ = (db.CheckConstraint("kind IN ('song','album','album_track')"),)
 
 

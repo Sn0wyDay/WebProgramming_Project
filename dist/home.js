@@ -37,7 +37,11 @@ window.REHome=(()=>{
   }
  }
  const reviewRequests=new Map();
- function reviewCards(items){return items.map(r=>`<article class="critic-item"><div class="critic-person"><div><strong>${esc(r.author)}</strong><small>${r.kind==='song'?'곡 평론':r.kind==='album_track'?'이 곡이 수록된 앨범 평론':'앨범 평론'}</small></div></div><h3>${esc(r.title)}</h3><blockquote class="review-excerpt">${esc(r.introduction||'')}</blockquote><span class="review-excerpt-label">짧은 발췌</span><a href="${/^https:\/\//.test(r.url)?esc(r.url):'#'}" target="_blank" rel="noopener">평론 원문 읽기</a></article>`).join('');}
+ function reviewCards(items){return items.map(r=>{
+  const selection=r.article_type==='selection',label=selection?'연말 선정 기사':r.kind==='song'?'곡 평론':r.kind==='album_track'?'이 곡이 수록된 앨범 평론':'앨범 평론';
+  return `<article class="critic-item"><div class="critic-person"><div><strong>${esc(r.author)}</strong><small>${label}</small></div></div><h3>${esc(r.title)}</h3><${selection?'p':'blockquote'} class="review-excerpt">${esc(r.introduction||'')}</${selection?'p':'blockquote'}><span class="review-excerpt-label">${selection?'선정 정보':'짧은 발췌'}</span><a href="${/^https:\/\//.test(r.url)?esc(r.url):'#'}" target="_blank" rel="noopener">${selection?'선정 기사 읽기':'평론 원문 읽기'}</a></article>`;
+ }).join('');}
+
  async function loadReviews(){
   const target=document.getElementById('home-reviews'),notice=document.getElementById('home-review-notice');if(!target||!notice||!current)return;
   if(current.reviews.length){target.innerHTML=reviewCards(current.reviews);return;}
@@ -46,13 +50,13 @@ window.REHome=(()=>{
    entry={until:Infinity};reviewRequests.set(sid,entry);
    entry.promise=api('/songs/'+sid+'/reviews','POST',{}).catch(()=>({status:'unavailable',reviews:[],retry_after:60})).then(data=>{entry.until=Date.now()+(data.status==='available'?86400:data.retry_after||60)*1000;return data;});
   }
-  target.innerHTML='<p class="loading" role="status">관련 평론을 찾는 중…</p>';notice.innerHTML='';
+  target.innerHTML='<p class="loading" role="status">평론·선정글을 찾는 중…</p>';notice.innerHTML='';
   const result=await entry.promise;if(!target.isConnected||current?.id!==sid)return;
   if(result.status==='available'){
-   current.reviews=result.reviews;target.innerHTML=reviewCards(result.reviews);notice.innerHTML=providerNotice(result);return;
+   current.reviews=result.reviews;target.innerHTML=reviewCards(result.reviews);notice.innerHTML=providerNotice(result)+(result.partial?'<p class="small-muted">일부 검색은 완료하지 못했지만, 확인된 자료를 표시합니다.</p>':'');return;
   }
   const failed=result.status==='unavailable',wait=Math.max(1,Math.ceil((entry.until-Date.now())/1000));
-  target.innerHTML=empty(failed?'평론을 불러오지 못했어요':'등록된 평론 없음',failed?'일시적으로 연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.':'이 곡과 연결된 공개 평론을 아직 찾지 못했어요.');
+  target.innerHTML=empty(failed?'자료를 불러오지 못했어요':'등록된 평론·선정글 없음',failed?'일시적으로 연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요.':'이 곡과 연결된 평론이나 선정 기사를 아직 찾지 못했어요.');
   notice.innerHTML=`<p class="small-muted">약 ${wait}초 뒤에 다시 찾을 수 있어요.</p>${action('평론 다시 찾기','reviews')}`;
   const button=notice.querySelector('button');button.disabled=true;
   setTimeout(()=>{if(button.isConnected){button.disabled=false;notice.querySelector('p')?.remove();}},wait*1000);
@@ -148,7 +152,7 @@ window.REHome=(()=>{
   root().innerHTML='<div class="loading" role="status">음악을 불러오는 중…</div>';
   try{
    const data=await api('/songs/'+id);if(version!==renderVersion)return;current=data;comments=[];commentPage=0;commentPages=0;
-   root().innerHTML=`<a class="back-button" href="#home">${icon('back')} 돌아가기</a><div class="song-hero">${coverImage(current)}<div><div class="eyebrow">${esc(current.album||'MUSIC RECORD')}</div><h1>${esc(current.title)}</h1><p class="song-meta">${esc(current.artist)}${current.album?' · '+esc(current.album):''}</p><div class="rating-control" aria-label="내 별점 선택">${Array.from({length:5},(_,i)=>`<button class="${i<(current.rating||0)?'filled':''}" data-home-action="rate" data-id="${i+1}" aria-label="별점 ${i+1}점" aria-pressed="${current.rating===i+1}">${icon('star')}</button>`).join('')}<span class="rating-label">${current.rating?'나의 별점 '+current.rating+'.0':'별점을 남겨 주세요'}</span></div></div><div id="home-detail-bookmark">${bookmark(current,true)}</div></div><div class="detail-layout reverse-detail"><section class="panel lyrics-panel"><div class="panel-header"><h2>가사와 나의 코멘트</h2><span>구절별 음악 기록</span></div><div class="lyric-hint">${icon('note')} 가사를 눌러 감상을 작성하고, 다시 누르면 작성 창을 닫을 수 있어요.</div><div id="home-lyrics">${current.passages.length?lyricRows():lyricEmpty()}</div><div id="home-provider-notice" role="status"></div><div class="home-lyric-buttons">${action(current.passages.length?'가사 새로 확인':'가사 불러오기','lyrics',current.id,'button outline')}${action(icon('plus')+' 기록 추가','record',current.id,'button dark record-button')}</div><div id="home-comment-more"></div><div id="home-archived-comments"></div></section><aside class="panel critics-panel"><div class="panel-header"><h2>음악 평론</h2><span>CRITICS’ NOTES</span></div><div id="home-reviews">${current.reviews.length?reviewCards(current.reviews):'<p class="loading" role="status">관련 평론을 찾는 중…</p>'}</div><div id="home-review-notice" role="status"></div><p class="critic-disclaimer">평론의 짧은 발췌입니다. 전체 내용은 원문에서 읽어보세요.</p></aside></div>`;
+   root().innerHTML=`<a class="back-button" href="#home">${icon('back')} 돌아가기</a><div class="song-hero">${coverImage(current)}<div><div class="eyebrow">${esc(current.album||'MUSIC RECORD')}</div><h1>${esc(current.title)}</h1><p class="song-meta">${esc(current.artist)}${current.album?' · '+esc(current.album):''}</p><div class="rating-control" aria-label="내 별점 선택">${Array.from({length:5},(_,i)=>`<button class="${i<(current.rating||0)?'filled':''}" data-home-action="rate" data-id="${i+1}" aria-label="별점 ${i+1}점" aria-pressed="${current.rating===i+1}">${icon('star')}</button>`).join('')}<span class="rating-label">${current.rating?'나의 별점 '+current.rating+'.0':'별점을 남겨 주세요'}</span></div></div><div id="home-detail-bookmark">${bookmark(current,true)}</div></div><div class="detail-layout reverse-detail"><section class="panel lyrics-panel"><div class="panel-header"><h2>가사와 나의 코멘트</h2><span>구절별 음악 기록</span></div><div class="lyric-hint">${icon('note')} 가사를 눌러 감상을 작성하고, 다시 누르면 작성 창을 닫을 수 있어요.</div><div id="home-lyrics">${current.passages.length?lyricRows():lyricEmpty()}</div><div id="home-provider-notice" role="status"></div><div class="home-lyric-buttons">${action(current.passages.length?'가사 새로 확인':'가사 불러오기','lyrics',current.id,'button outline')}${action(icon('plus')+' 기록 추가','record',current.id,'button dark record-button')}</div><div id="home-comment-more"></div><div id="home-archived-comments"></div></section><aside class="panel critics-panel"><div class="panel-header"><h2>음악 평론 · 선정글</h2><span>CRITICS’ NOTES</span></div><div id="home-reviews">${current.reviews.length?reviewCards(current.reviews):'<p class="loading" role="status">평론·선정글을 찾는 중…</p>'}</div><div id="home-review-notice" role="status"></div><p class="critic-disclaimer">발췌와 선정 정보를 간략히 표시합니다. 자세한 내용은 원문에서 읽어보세요.</p></aside></div>`;
    loadArtwork(root());loadReviews();
    lyricsRetryAt=Date.now()+(current.lyrics_retry_after||0)*1000;syncLyricButtons();
    await loadComments(current.id);

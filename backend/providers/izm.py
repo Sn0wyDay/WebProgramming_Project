@@ -3,6 +3,7 @@ import re
 from bs4 import BeautifulSoup
 from .http import JsonClient,ProviderError
 from .musicbrainz import name_key
+from .review_matching import same_artist,same_title
 
 SOURCE='IZM'
 SITE='https://www.izm.co.kr'
@@ -54,27 +55,22 @@ def normalize_search(data):
 client=JsonClient('https://api.izm.co.kr/api',1.05,transform=normalize_search)
 
 
-def track_key(text):
-    # Featured credits can differ in typography. Live/remix/instrumental tags stay.
-    return name_key(re.sub(r'\s*[([]\s*(?:feat\.?|ft\.?)\s+[^)\]]*[)\]]','',text,flags=re.I))
-
-
 def match(row,title,artist_names,album=None,instrumental=False):
-    if not {name_key(a) for a in artist_names}&{name_key(a) for a in row['artists']}:return None
+    if not any(same_artist(a,artist_names) for a in row['artists']):return None
     if row['kind']=='song':
-        return 'song' if track_key(row['title'])==track_key(title) else None
-    if album and name_key(row['title'])==name_key(album):return 'album'
+        return 'song' if same_title(row['title'],title) else None
+    if album and same_title(row['title'],album):return 'album'
     # An album review must list this exact version as a track; a mention in prose
     # or an artist name alone is insufficient. Instrumentals keep their suffix.
-    if not instrumental and any(track_key(t)==track_key(title) for t in row['tracks']):return 'album_track'
+    if not instrumental and any(same_title(t,title) for t in row['tracks']):return 'album_track'
     return None
 
 
-def find(title,artist,album=None,instrumental=False,resolve_aliases=None):
+def find(title,artist,album=None,instrumental=False,resolve_aliases=None,title_aliases=()):
     names=[artist];seen=set();found={};received={}
     def collect():
         for row in received.values():
-            relation=match(row,title,names,album,instrumental)
+            relation=next((kind for t in [title]+list(title_aliases) if (kind:=match(row,t,names,album,instrumental))),None)
             if relation:found[row['url']]={**row,'relation':relation}
     def search(query):
         key=name_key(query)
@@ -87,6 +83,8 @@ def find(title,artist,album=None,instrumental=False,resolve_aliases=None):
     search(title)
     if found:return list(found.values())[:3]
     if album:search(album)
+    if found:return list(found.values())[:3]
+    for alternate in list(title_aliases)[:1]:search(alternate)
     if found:return list(found.values())[:3]
     if resolve_aliases and not re.search('[가-힣]',artist):names+=resolve_aliases()
     names=list(dict.fromkeys(names))

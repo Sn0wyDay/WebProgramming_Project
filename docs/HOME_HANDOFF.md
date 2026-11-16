@@ -215,3 +215,24 @@ NO PAIN → Power Andre 99 / 김태훈 / 수록 앨범 평론 / IZM 32362.
 평론 보완: 별칭 확인 후 앞서 받은 곡명·앨범명 결과를 다시 검사합니다. 곡명/앨범명 검색에서
 맞는 리뷰를 받았어도 초기 영문 가수명과 다르다는 이유로 버리던 누락을 방지했습니다.
 이 회귀 검사를 포함한 최신 자동화 결과는 59개 통과입니다.
+
+## 복수 제공처와 선정 기사
+
+일반 평론은 IZM을 먼저 조회합니다. 적합한 결과가 없거나 조회가 실패하면 HELLOKPOP의
+`/wp-json/wp/v2/posts` 공개 검색 응답에서 연말 결산 Honorable Mentions의 명시된 항목을 대조합니다.
+연말 기사 제목, 공개 필자 ID와 이름, Songs/Albums 구분, 항목의 가수와 제목을 모두 확인합니다.
+단순 본문 언급·뉴스·공연 안내는 선정 자료로 연결하지 않습니다.
+
+`backend/providers/review_matching.py`는 명확한 한글·영문 병기와 EP/Single 표기를 처리합니다.
+곡의 확인된 다른 제목은 기존 대응표·캐시에서만 읽으며, 버전이나 동명이인을 임의로 합치지 않습니다.
+서버의 기본 18초 예산 중 IZM은 최대 9초, 추가 제공처는 최대 8초를 사용합니다.
+기존 결과 없음 캐시는 검색 개정 키로 분리해 새 조회를 막지 않습니다. 대기는 실제 남은 시간입니다.
+
+`Review.article_type`은 review/selection, `ReviewLink.context`는 곡별 선정 정보입니다.
+마이그레이션 a91f378c20e4가 기존 평론·연결을 보존합니다. 상세 API는 article_type과 해당 곡의 context를 반환합니다.
+화면에서는 평론은 짧은 발췌로, 선정 자료는 연말 선정 기사/선정 정보로 구분하며 매체 이름은 숨깁니다.
+
+실제 확인: 욕망주사기 / Redoor / Jung Bae / 2025 In Review: Day 3 – The Honorable Mentions /
+Rock and Alternative → Songs. 단독 평론은 확보하지 못했으며 선정 기사로 연결합니다.
+실제 임시 DB 검사: `python -m scripts.verify_editorial_sources`. 모의 응답 회귀 검사와 별개입니다.
+자동화 73개 통과. 캐시를 읽은 직후 다른 클라이언트가 완료하는 경우에도 외부 요청을 반복하지 않도록 수정했습니다.

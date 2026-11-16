@@ -78,6 +78,17 @@ def test_expired_outside_stale_window_is_not_used(tmp_path):
         with pytest.raises(ProviderError):JsonClient(BASE,0,path).get('/expired')
 
 
+def test_cache_filled_just_before_lease_does_not_repeat_request(tmp_path):
+    path=tmp_path/'cache.db';DiskCache(path)
+    reserve=DiskCache.reserve
+    def filled_between_read_and_reserve(store,*args,**kwargs):
+        result=reserve(store,*args,**kwargs)
+        store.write(BASE+'/race',{'items':['already completed']},60,60)
+        return result
+    with patch.object(DiskCache,'reserve',filled_between_read_and_reserve),patch('backend.providers.http.urlopen',side_effect=AssertionError('Duplicate request')):
+        assert JsonClient(BASE,0,path).get('/race')=={'items':['already completed']}
+
+
 def test_http_date_retry_after_is_honored():
     date=format_datetime(datetime.now(timezone.utc)+timedelta(seconds=120))
     assert 118<=retry_seconds(date)<=120

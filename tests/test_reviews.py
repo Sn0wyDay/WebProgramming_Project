@@ -6,7 +6,7 @@ import pytest
 from flask_migrate import upgrade
 from backend import create_app,db
 from backend.models import Album,Song,User,UserSong,Review,ReviewLink,ReviewSource
-from backend.providers import izm,musicbrainz
+from backend.providers import izm,musicbrainz,hellokpop
 from backend.providers.http import JsonClient,ProviderError
 from backend import reviews
 
@@ -93,7 +93,7 @@ def app(tmp_path_factory):
 @pytest.fixture(autouse=True)
 def clear_memory():
     izm.client.cache.clear()
-    yield
+    with patch.object(hellokpop,'find',return_value=[]):yield
     izm.client.cache.clear()
 
 
@@ -147,7 +147,9 @@ def test_migration_keeps_legacy_review_and_backfills_its_link(tmp_path):
         upgrade(directory=folder,revision='55ea10177859')
         song=Song(provider='test',external_id='legacy',title='Legacy',artist='Artist');source=ReviewSource(name='Legacy Source')
         db.session.add_all([song,source]);db.session.flush()
-        db.session.add(Review(song_id=song.id,source_id=source.id,title='Legacy Article',author='Writer',url='https://example.com/legacy',introduction='Existing excerpt'));db.session.commit()
+        db.session.execute(db.text('INSERT INTO review(song_id,source_id,title,author,url,introduction) VALUES (:song,:source,:title,:author,:url,:intro)'),
+                           dict(song=song.id,source=source.id,title='Legacy Article',author='Writer',url='https://example.com/legacy',intro='Existing excerpt'));db.session.commit()
         upgrade(directory=folder)
         assert reviews.for_song(song)[0]['title']=='Legacy Article'
         assert reviews.for_song(song)[0]['kind']=='song'
+        assert reviews.for_song(song)[0]['article_type']=='review'
