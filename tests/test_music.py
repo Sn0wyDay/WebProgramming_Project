@@ -10,6 +10,14 @@ from backend.providers.http import JsonClient, ProviderError
 MBID='cf3b2fd9-e6cc-49bf-abf3-63a3af75a6dc'
 META=dict(external_id=MBID,provider='musicbrainz',title='밤편지',artist='IU',album=None,album_id=None,duration_ms=253000)
 
+@pytest.fixture(autouse=True)
+def isolate_provider_memory():
+    musicbrainz.client.cache.clear()
+    lrclib.client.cache.clear()
+    yield
+    musicbrainz.client.cache.clear()
+    lrclib.client.cache.clear()
+
 @pytest.fixture(scope='module')
 def app(tmp_path_factory):
     app=create_app({'TESTING':True,'SECRET_KEY':'test','SESSION_SQLALCHEMY_TABLE':'music_test_sessions','SQLALCHEMY_DATABASE_URI':'sqlite:///'+str(tmp_path_factory.mktemp('music')/'test.db')})
@@ -30,24 +38,26 @@ def test_import_and_immutable_lyrics(app):
         assert send(c,'/catalog/import',data={'external_id':MBID}).json['id']==sid
         assert lookup.call_count==1
     detail=c.get('/api/songs/'+str(sid)).json
-    assert detail['title']=='밤편지' and detail['lyrics_status']=='missing'
+    assert detail['title']=='밤편지' and detail['lyrics_status']=='unqueried'
     original=dict(text='테스트 구절 A\n테스트 구절 B',source_url='https://lrclib.net/api/get/1')
     with patch.object(lrclib,'find',return_value=original):
         v1=send(c,f'/songs/{sid}/lyrics').json['version_id']
         assert send(c,f'/songs/{sid}/lyrics').json['version_id']==v1
+    with patch.object(lrclib,'find',side_effect=AssertionError('Saved lyrics must not call an external API')):
+        assert send(c,f'/songs/{sid}/lyrics').json['from_database'] is True
     p=c.get('/api/songs/'+str(sid)).json['passages'][0]
     cid=send(c,'/comments',data=dict(passage_id=p['id'],text='original comment',visibility='private')).json['id']
     changed=dict(text='테스트 구절 B\n테스트 구절 A',source_url='https://lrclib.net/api/get/2')
     with patch.object(lrclib,'find',return_value=changed):
-        assert send(c,f'/songs/{sid}/lyrics').json['version_id']!=v1
+        assert send(c,f'/songs/{sid}/lyrics',data={'refresh':True}).json['version_id']!=v1
     assert c.get('/api/comments/'+str(cid)).json['quote']=='테스트 구절 A'
     assert c.get(f'/api/songs/{sid}/comments').json['items'][0]['passage_id']==p['id']
     with patch.object(lrclib,'find',return_value=None), patch.object(musicbrainz,'exact_artists',return_value=[]), patch.object(musicbrainz,'recording_titles',return_value=[]):
-        assert send(c,f'/songs/{sid}/lyrics').json['status']=='missing'
+        assert send(c,f'/songs/{sid}/lyrics',data={'refresh':True}).json['refresh_failed'] is True
     assert c.get('/api/comments/'+str(cid)).json['quote']=='테스트 구절 A'
     with patch.object(lrclib,'find',side_effect=ProviderError('timeout','provider_timeout',504)):
-        r=send(c,f'/songs/{sid}/lyrics')
-        assert r.status_code==504 and r.json['code']=='provider_timeout'
+        r=send(c,f'/songs/{sid}/lyrics',data={'refresh':True})
+        assert r.status_code==200 and r.json['refresh_failed'] is True and r.json['from_database'] is True
     with app.app_context():
         assert db.session.query(Song).count()==1
         assert db.session.query(LyricVersion).count()==2
@@ -142,11 +152,11 @@ def test_unverified_titles_need_explicit_candidate_selection(app):
     assert send(c,'/login',data=dict(identifier='music',password='password8')).status_code==200
     row=dict(id=77,trackName='English title',artistName='Test Artist',albumName='Test Album',duration=100,plainLyrics='후보 테스트')
     def response(path,params):
-        return [row] if params.get('album_name') else []
+        return [row] if params.get('q') else []
     with patch.object(lrclib.client,'get',side_effect=response):
         r=send(c,f'/songs/{sid}/lyrics')
         assert r.json['status']=='candidates' and r.json['candidates'][0]['id']==77
-        assert c.get(f'/api/songs/{sid}').json['lyrics_status']=='missing'
+        assert c.get(f'/api/songs/{sid}').json['lyrics_status']=='unmatched'
         assert send(c,f'/songs/{sid}/lyrics',data={'candidate_id':88}).status_code==400
         assert send(c,f'/songs/{sid}/lyrics',data={'candidate_id':77}).json['status']=='available'
         detail=c.get(f'/api/songs/{sid}').json
@@ -164,3 +174,109 @@ def test_verified_title_rule_is_bound_to_identity():
         assert alternate_titles(song,'Other Album')==[]
         song.artist='Other Artist'
         assert alternate_titles(song,'Hospital')==[]
+
+
+def lyric_test_client(app,name):
+    c=app.test_client()
+    assert send(c,'/register',data=dict(email=name+'@example.com',username=name,name=name,password='testpass8')).status_code==201
+    assert send(c,'/login',data=dict(identifier=name,password='testpass8')).status_code==200
+    return c
+
+
+def lyric_test_song(app,title,artist='Redoor',external_id=None,album_title='Hospital',duration=263000,provider='fixture'):
+    import uuid
+    from backend.models import Album
+    with app.app_context():
+        album=Album(provider='fixture',external_id=uuid.uuid4().hex,title=album_title,artist=artist)
+        db.session.add(album);db.session.flush()
+        s=Song(provider=provider,external_id=external_id or uuid.uuid4().hex,title=title,artist=artist,album_id=album.id,duration_ms=duration)
+        db.session.add(s);db.session.commit()
+        return s.id
+
+
+def test_syringe_resolves_without_musicbrainz_network(app):
+    c=lyric_test_client(app,'lyric_syringe')
+    sid=lyric_test_song(app,'욕망주사기',external_id='635b1cad-a0c2-465d-8208-fd9b897b9125',provider='musicbrainz')
+    row=dict(id=35646335,trackName='Syringe',artistName='Redoor',albumName='Hospital - EP',duration=264,plainLyrics='검증용 가사')
+    def response(path,params):
+        assert params.get('q') or params.get('track_name'),'LRCLIB requires q or track_name'
+        return [row] if params.get('track_name')=='Syringe' else []
+    with patch.object(musicbrainz.client,'get',side_effect=ProviderError('MB unavailable','provider_rate_limited',503,30)) as mb,patch.object(lrclib.client,'get',side_effect=response):
+        r=send(c,f'/songs/{sid}/lyrics')
+        assert r.status_code==200 and r.json['status']=='available'
+        assert mb.call_count==0
+        detail=c.get(f'/api/songs/{sid}').json
+        assert detail['lyrics_title']=='Syringe' and detail['lyrics_status']=='available'
+
+
+def test_candidate_query_satisfies_provider_contract_even_when_metadata_down(app):
+    c=lyric_test_client(app,'lyric_candidate')
+    sid=lyric_test_song(app,'번역 미확인 제목',provider='musicbrainz')
+    row=dict(id=12345,trackName='Unverified English',artistName='Redoor',albumName='Hospital',duration=263,plainLyrics='후보 검증')
+    def response(path,params):
+        assert params.get('q') or params.get('track_name')
+        return [row] if params.get('q')=='Redoor Hospital' else []
+    with patch.object(musicbrainz.client,'get',side_effect=AssertionError('No MusicBrainz HTTP needed')) as mb,patch.object(lrclib.client,'get',side_effect=response):
+        r=send(c,f'/songs/{sid}/lyrics')
+        assert r.status_code==200 and r.json['status']=='candidates'
+        assert r.json['candidates'][0]['id']==12345
+        assert mb.call_count==0
+        assert c.get(f'/api/songs/{sid}').json['passages']==[]
+
+
+def test_instrumental_is_explained_without_external_lookup(app):
+    c=lyric_test_client(app,'lyric_instrumental')
+    sid=lyric_test_song(app,'Tik Tak Tok (instrumental)',artist='Silica Gel')
+    with patch('backend.lyric_service.fetch_lyrics',side_effect=AssertionError('Instrumentals must not fetch lyrics')):
+        r=send(c,f'/songs/{sid}/lyrics')
+        assert r.status_code==200 and r.json['status']=='instrumental'
+        assert '반주' in r.json['message']
+        assert c.get(f'/api/songs/{sid}').json['lyrics_status']=='instrumental'
+
+
+def test_temporary_failure_is_not_missing_and_cooldown_is_preserved(app):
+    from backend.models import LyricLookup
+    from datetime import datetime,timedelta
+    c=lyric_test_client(app,'lyric_error')
+    sid=lyric_test_song(app,'오류와 미등록 구분')
+    with patch.object(lrclib,'find',side_effect=ProviderError('temporary','provider_timeout',504)) as provider:
+        r=send(c,f'/songs/{sid}/lyrics')
+        assert r.status_code==504 and r.json['retry_after']>=15
+        assert c.get(f'/api/songs/{sid}').json['lyrics_status']=='error'
+        repeated=send(c,f'/songs/{sid}/lyrics',data={'refresh':True})
+        assert repeated.status_code==503 and repeated.json['retry_after']>0
+        assert provider.call_count==1
+    with app.app_context():
+        db.session.get(LyricLookup,sid).retry_at=datetime.utcnow()-timedelta(seconds=1);db.session.commit()
+    result=dict(text='복구된 가사',source_url='https://lrclib.net/api/get/54321',title='오류와 미등록 구분')
+    with patch.object(lrclib,'find',return_value=result):
+        assert send(c,f'/songs/{sid}/lyrics').json['status']=='available'
+    with patch.object(lrclib,'find',side_effect=ProviderError('temporary','provider_timeout',504)):
+        refreshed=send(c,f'/songs/{sid}/lyrics',data={'refresh':True})
+        assert refreshed.status_code==200 and refreshed.json['from_database'] is True
+        assert refreshed.json['refresh_failed'] is True and refreshed.json['message']
+        assert c.get(f'/api/songs/{sid}').json['lyrics_status']=='available'
+
+
+def test_confirmed_no_match_is_distinct_and_cached(app):
+    c=lyric_test_client(app,'lyric_missing')
+    sid=lyric_test_song(app,'일치 결과 없는 곡')
+    with patch.object(lrclib,'find',return_value=None) as find,patch.object(lrclib,'candidates',return_value=[]) as candidates:
+        first=send(c,f'/songs/{sid}/lyrics')
+        assert first.status_code==200 and first.json['status']=='missing'
+        assert '표기' in first.json['message']
+        assert c.get(f'/api/songs/{sid}').json['lyrics_status']=='missing'
+        assert send(c,f'/songs/{sid}/lyrics').json['cached'] is True
+        refreshed=send(c,f'/songs/{sid}/lyrics',data={'refresh':True})
+        assert refreshed.json['cached'] is True and refreshed.json['retry_after']>0
+        assert c.get(f'/api/songs/{sid}').json['lyrics_retry_after']>0
+        assert find.call_count==1 and candidates.call_count==1
+
+
+@pytest.mark.parametrize('title,expected',[
+    ('Tik Tak Tok (instrumental)',True),('Tik Tak Tok (Inst.)',True),
+    ('Instrumental Love',False),('Tik Tak Tok (feat. So!YoON!)',False)
+])
+def test_only_version_qualifiers_mark_instrumental(title,expected):
+    from backend.providers.versions import is_instrumental
+    assert is_instrumental(title)==expected

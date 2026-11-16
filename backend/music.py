@@ -21,7 +21,7 @@ def import_song(external_id, retry=True):
             album = Album(provider='musicbrainz', external_id=data['album_id'], title=data['album'], artist=data['artist'])
             db.session.add(album)
             db.session.flush()
-    song = Song(provider='musicbrainz', external_id=data['external_id'], title=data['title'], artist=data['artist'], album_id=album.id if album else None, duration_ms=data['duration_ms'])
+    song = Song(provider='musicbrainz', external_id=data['external_id'], title=data['title'], artist=data['artist'], album_id=album.id if album else None, duration_ms=data['duration_ms'],is_instrumental=data.get('instrumental',False))
     db.session.add(song)
     try:
         db.session.commit()
@@ -39,8 +39,10 @@ def import_song(external_id, retry=True):
 def artist_aliases(song):
     if song.provider != 'musicbrainz':
         return []
-    artists=musicbrainz.exact_artists(song.artist)
-    return artists[0]['aliases'] if len(artists)==1 else []
+    # Metadata/review lookups may already have resolved this precise recording.
+    # Reading those verified names must never add a MusicBrainz HTTP dependency.
+    precise=musicbrainz.client.recall('recording-artist-names:'+song.external_id)
+    return precise if precise else musicbrainz.cached_artist_aliases(song.artist)
 
 
 def alternate_titles(song, album):
@@ -50,7 +52,7 @@ def alternate_titles(song, album):
     rule=rules.get(song.external_id)
     if rule and rule['title']==song.title and rule['artist']==song.artist and rule['album']==album and song.duration_ms and abs(rule['duration_ms']-song.duration_ms)<=2000:
         return rule['alternate_titles'][:2]
-    return musicbrainz.recording_titles(song.external_id)
+    return musicbrainz.recording_titles(song.external_id,allow_network=False)
 
 
 def lyric_candidates(song):
@@ -67,16 +69,11 @@ def fetch_lyrics(song, candidate_id=None):
             raise ProviderError('현재 곡의 가사 후보가 아닙니다. 다시 조회하세요.','invalid_lyric_candidate',400)
         result['match_method']='user_confirmed'
     else:
-        result=lrclib.find(song.title,song.artist,song.duration_ms)
-        if not result and song.provider=='musicbrainz':
-            album=db.session.get(Album,song.album_id) if song.album_id else None
-            album_title=album.title if album else None
-            titles=alternate_titles(song,album_title)
-            if titles:
-                result=lrclib.find(song.title,song.artist,song.duration_ms,title_aliases=titles,album=album_title)
-            if not result:
-                aliases=artist_aliases(song)
-                result=lrclib.find(song.title,song.artist,song.duration_ms,aliases=aliases,title_aliases=titles,album=album_title)
+        album=db.session.get(Album,song.album_id) if song.album_id else None
+        album_title=album.title if album else None
+        # Lyrics depend on LRCLIB only. Optional MusicBrainz hints are cache-only.
+        result=lrclib.find(song.title,song.artist,song.duration_ms,aliases=artist_aliases(song),
+                          title_aliases=alternate_titles(song,album_title),album=album_title)
     if not result:
         return None
     # Store one canonical representation; never edit previous passages.

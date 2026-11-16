@@ -75,7 +75,7 @@ def profile():
     db.session.commit()
     return jsonify(user=public(user))
 
-from .models import Album, Song, Passage, LyricVersion, Comment, UserSong, Friendship, Review, ReviewSource
+from .models import now, Album, Song, Passage, LyricVersion, Comment, UserSong, Friendship, Review, ReviewSource
 from flask import abort
 
 def body():
@@ -144,6 +144,30 @@ def friend_list():
     rows=db.session.scalars(db.select(Friendship).where(db.or_(Friendship.low_id==uid,Friendship.high_id==uid))).all()
     return jsonify(items=[dict(user=public(db.session.get(User,r.high_id if r.low_id==uid else r.low_id)),status='accepted' if r.accepted else ('outgoing' if r.requester_id==uid else 'incoming')) for r in rows])
 
+from .lyric_service import availability,lookup as lookup_lyrics
+
+def song_summary(s):
+    from .providers.coverart import source_url as artwork_source
+    album=db.session.get(Album,s.album_id) if s.album_id else None
+    own=db.session.get(UserSong,(session['user_id'],s.id))
+    count=db.session.scalar(db.select(db.func.count(Comment.id)).join(Passage,Comment.passage_id==Passage.id).join(LyricVersion,Passage.version_id==LyricVersion.id).where(LyricVersion.song_id==s.id,Comment.user_id==session['user_id']))
+    return dict(id=s.id,title=s.title,artist=s.artist,album=album.title if album else None,
+                album_id=album.id if album else None,image=album.image if album else None,
+                artwork_source=artwork_source(album.image) if album else None,rating=own.rating if own else None,
+                saved=bool(own and own.saved),recorded=bool(own and own.recorded),comment_count=count,**availability(s))
+
+
+@api.get('/home')
+@login_required
+def home_data():
+    uid=session['user_id']
+    commented=db.select(LyricVersion.song_id).join(Passage,Passage.version_id==LyricVersion.id).join(Comment,Comment.passage_id==Passage.id).where(Comment.user_id==uid)
+    stmt=db.select(Song).outerjoin(UserSong,db.and_(UserSong.song_id==Song.id,UserSong.user_id==uid)).where(db.or_(UserSong.recorded.is_(True),Song.id.in_(commented))).order_by(UserSong.recorded_at.desc(),Song.id.desc())
+    result=page_query(stmt)
+    note_count=db.session.scalar(db.select(db.func.count(Comment.id)).where(Comment.user_id==uid))
+    return jsonify(items=[song_summary(s) for s in result.items],pages=result.pages,total=result.total,comment_count=note_count)
+
+
 @api.get('/songs')
 @login_required
 def songs():
@@ -151,7 +175,7 @@ def songs():
     stmt=db.select(Song)
     if q: stmt=stmt.where(db.or_(Song.title.contains(q,autoescape=True),Song.artist.contains(q,autoescape=True),Song.id.in_(db.select(LyricVersion.song_id).join(Passage,Passage.version_id==LyricVersion.id).where(Passage.text.contains(q,autoescape=True)))))
     result=page_query(stmt.order_by(Song.id))
-    return jsonify(items=[dict(id=s.id,title=s.title,artist=s.artist) for s in result.items],pages=result.pages,notice='저장된 곡·가수·가사 검색입니다.')
+    return jsonify(items=[song_summary(s) for s in result.items],pages=result.pages,notice='저장된 곡·가수·가사 검색입니다.')
 
 @api.get('/songs/<int:sid>')
 @login_required
@@ -160,9 +184,38 @@ def song_detail(sid):
     versions=db.session.scalars(db.select(LyricVersion).where(LyricVersion.song_id==sid).order_by(LyricVersion.id.desc())).all()
     version=versions[0] if versions else None
     passages=db.session.scalars(db.select(Passage).where(Passage.version_id==version.id).order_by(Passage.position)).all() if version else []
-    reviews=db.session.scalars(db.select(Review).where(Review.song_id==sid)).all()
-    album=db.session.get(Album,s.album_id) if s.album_id else None
-    return jsonify(id=s.id,title=s.title,artist=s.artist,album=album.title if album else None,provider=s.provider,external_id=s.external_id,lyrics_status='available' if passages else 'missing',passages=[dict(id=p.id,text=p.text,version_id=p.version_id) for p in passages],source_url=version.source_url if version else None,lyrics_title=version.matched_title if version else None,lyrics_match=version.match_method if version else None,reviews=[dict(title=r.title,author=r.author,url=r.url,source=db.session.get(ReviewSource,r.source_id).name,introduction=r.introduction) for r in reviews])
+    from .reviews import for_song
+    return jsonify(**song_summary(s),provider=s.provider,external_id=s.external_id,passages=[dict(id=p.id,text=p.text,version_id=p.version_id) for p in passages],source_url=version.source_url if version else None,lyrics_title=version.matched_title if version else None,lyrics_match=version.match_method if version else None,reviews=for_song(s))
+
+
+@api.post('/songs/<int:sid>/reviews')
+@login_required
+def song_reviews(sid):
+    from .reviews import lookup
+    return jsonify(lookup(db.get_or_404(Song,sid)))
+
+
+@api.post('/songs/<int:sid>/artwork')
+@login_required
+def song_artwork(sid):
+    from .providers import coverart
+    from .providers.http import ProviderError
+    song=db.get_or_404(Song,sid)
+    album=db.session.get(Album,song.album_id) if song.album_id else None
+    if not album or album.provider!='musicbrainz':
+        return jsonify(status='missing',image=None,retry_after=300)
+    if album.image:
+        return jsonify(status='available',image=album.image,source_url=coverart.source_url(album.image))
+    try:
+        result=coverart.find(album.external_id)
+    except ProviderError as error:
+        # Optional artwork must not prevent music, lyrics or records from opening.
+        return jsonify(status='unavailable',image=None,message='앨범 표지를 불러오지 못해 기본 이미지를 표시합니다.',retry_after=max(60,error.retry_after))
+    if not result:
+        return jsonify(status='missing',image=None,retry_after=300)
+    album.image=result['image']
+    db.session.commit()
+    return jsonify(status='available',**result)
 
 @api.route('/comments',methods=['GET','POST'])
 @login_required
@@ -173,7 +226,14 @@ def comments():
         text=data.get('text'); visibility=data.get('visibility','private')
         if not isinstance(text,str) or not 1<=len(text.strip())<=2000 or visibility not in ('private','friends'): abort(400)
         c=Comment(user_id=session['user_id'],passage_id=p.id,text=text.strip(),visibility=visibility)
-        db.session.add(c); db.session.commit()
+        db.session.add(c)
+        version=db.session.get(LyricVersion,p.version_id)
+        row=db.session.get(UserSong,(session['user_id'],version.song_id))
+        if row is None:
+            row=UserSong(user_id=session['user_id'],song_id=version.song_id)
+            db.session.add(row)
+        if not row.recorded:row.recorded=True;row.recorded_at=now()
+        db.session.commit()
         return jsonify(comment_json(c)),201
     uid=session['user_id']; scope=request.args.get('scope','mine')
     stmt=db.select(Comment)
@@ -217,6 +277,7 @@ def record_song(sid):
         if key in data and type(data[key]) is not bool: abort(400)
     row=db.session.get(UserSong,(session['user_id'],sid))
     if not row: row=UserSong(user_id=session['user_id'],song_id=sid); db.session.add(row)
+    if data.get('recorded') and not row.recorded:row.recorded_at=now()
     for key,value in data.items(): setattr(row,key,value)
     db.session.commit(); return jsonify(ok=True)
 
@@ -232,7 +293,9 @@ from .music import import_song, fetch_lyrics, lyric_candidates
 
 @api.errorhandler(ProviderError)
 def provider_error(error):
-    return jsonify(error=str(error),code=error.code),error.status
+    response=jsonify(error=str(error),code=error.code,retry_after=error.retry_after)
+    if error.retry_after:response.headers['Retry-After']=str(error.retry_after)
+    return response,error.status
 
 @api.get('/catalog/search')
 @login_required
@@ -257,13 +320,10 @@ def catalog_import():
 def song_lyrics(sid):
     song=db.get_or_404(Song,sid)
     data=body()
+    if 'refresh' in data and type(data['refresh']) is not bool:abort(400)
     candidate=data.get('candidate_id')
     if candidate is not None and (type(candidate) is not int or candidate<=0): abort(400)
-    version=fetch_lyrics(song,candidate_id=candidate)
-    if version:
-        return jsonify(status='available',version_id=version.id)
-    candidates=lyric_candidates(song)
-    return jsonify(status='candidates' if candidates else 'missing',candidates=[dict(id=int(c['external_id']),title=c['title'],artist=c['artist'],album=c['album'],duration=c['duration'],preview='\n'.join(c['text'].splitlines()[:2])) for c in candidates])
+    return jsonify(lookup_lyrics(song,refresh=data.get('refresh',False),candidate_id=candidate))
 
 @api.get('/songs/<int:sid>/comments')
 @login_required

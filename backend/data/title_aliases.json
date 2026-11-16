@@ -4,7 +4,19 @@
     "artist": "Redoor",
     "album": "Hospital",
     "duration_ms": 256000,
-    "alternate_titles": ["Shadow of You"],
+    "alternate_titles": [
+      "Shadow of You"
+    ],
     "source_url": "https://www.joox.com/th/single/OIMUuDWt54qR4YwTDSh5rA%3D%3D"
+  },
+  "635b1cad-a0c2-465d-8208-fd9b897b9125": {
+    "title": "욕망주사기",
+    "artist": "Redoor",
+    "album": "Hospital",
+    "duration_ms": 263000,
+    "alternate_titles": [
+      "Syringe"
+    ],
+    "source_url": "https://www.joox.com/th/album/fl6A3PmEZzmV0L8rXFZrNA%3D%3D"
   }
 }
