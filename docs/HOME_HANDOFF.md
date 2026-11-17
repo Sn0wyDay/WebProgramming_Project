@@ -45,11 +45,15 @@ REHome.leave();
 | `GET /api/home?page=1` | 현재 계정의 기록 음악·별점·저장 여부·코멘트 수·홈 통계 |
 | `GET /api/songs?q=&page=1` | DB에 확보한 음악·가사 검색 |
 | `GET /api/catalog/search?q=&page=1` | 외부 음악 검색 |
+| `POST /api/catalog/search-jobs` | 홈의 비동기 외부 검색, `{q,page}` |
 | `POST /api/catalog/import` | 서버가 확인한 외부 곡 ID로 메타데이터 가져오기 |
 | `GET /api/songs/<id>` | DB에 저장된 가사와 곡 정보, 내 별점·저장 여부 |
 | `POST /api/songs/<id>/artwork` | 앨범 표지 별도 조회: status, image, source_url, retry_after |
 | `POST /api/songs/<id>/reviews` | 평론 별도 조회: status, reviews, retry_after |
 | `POST /api/songs/<id>/lyrics` | 기본 `{}`은 저장 가사를 재사용; `{refresh:true}`만 새 조회 |
+| `POST /api/songs/<id>/resources/<kind>` | 홈의 비동기 lyrics/reviews/artwork 조회 |
+| `GET /api/resource-jobs/<job_id>` | 공개 자료 조회 상태·결과 확인 |
+| `GET /api/media/artwork/<hash>.img` | 확보한 표지 파일 표시 |
 | `PUT /api/records/<id>` | 내 별점·곡 저장·기록 추가 |
 | `GET /api/songs/<id>/comments?page=1` | 작성자/친구 관계로 필터링한 구절별 코멘트 |
 | `POST /api/comments` | `{passage_id, text, visibility}` 저장 |
@@ -236,3 +240,34 @@ NO PAIN → Power Andre 99 / 김태훈 / 수록 앨범 평론 / IZM 32362.
 Rock and Alternative → Songs. 단독 평론은 확보하지 못했으며 선정 기사로 연결합니다.
 실제 임시 DB 검사: `python -m scripts.verify_editorial_sources`. 모의 응답 회귀 검사와 별개입니다.
 자동화 73개 통과. 캐시를 읽은 직후 다른 클라이언트가 완료하는 경우에도 외부 요청을 반복하지 않도록 수정했습니다.
+
+## 공개 자료 대기열과 직접 조회
+
+기존 동기 API는 유지하며 REHome은 비동기 API를 사용합니다. 추가 의존 서비스는 없습니다.
+`resource_jobs.py`가 SQLite 작업 파일과 스레드 2개를 사용합니다. 요청마다 새 스레드를 만들지 않습니다.
+본문은 가사 조회의 `refresh`/`candidate_id` 또는 음악 검색의 `q`/`page`만 허용합니다.
+상태 조회도 로그인이 필요하며 개인 코멘트·세션·계정 정보는 작업 파일에 넣지 않습니다.
+
+제출 응답은 `202 {status:'pending',job_id,state,poll_after_ms}` 또는
+`200 {status:'completed',result}`입니다. `GET /resource-jobs/<job_id>`도 같은 형식이며,
+실패한 작업은 `{status:'failed',result:{error,code,retry_after}}`입니다.
+정상 결과 내부의 available/missing/candidates/unavailable 상태는 기존 서비스와 같습니다.
+클라이언트는 표시할 때 작업 결과의 retry_after를 사용하며, 저장 결과를 조회해도 대기 시간이 초기화되지 않습니다.
+
+가사는 DB, 이전 가사 ID, 메타데이터 직접 조회, 제한된 검색 순서입니다.
+원문 가사 버전과 구절 ID는 계속 불변이며 새 자료도 기존 코멘트를 다른 구절에 옮기지 않습니다.
+평론은 계속 IZM 우선이며 선정 자료와 구분합니다.
+검색의 저장된 결과는 바로 반환하고, 만료 결과에는 이전 자료 안내와 백그라운드 갱신을 적용합니다.
+외부 검색 실패 시에도 오류를 알리고 별도 영역에 저장된 음악을 표시합니다.
+
+표지 원래 URL은 Album.image에 유지됩니다. 확보한 파일이 있으면 API의 image는
+`/api/media/artwork/<sha256>.img`입니다. 따라서 클라이언트는 검증된 이 상대 경로도 허용해야 합니다.
+허용한 원본·이동 호스트, HTTPS, 이미지 헤더·형식, 파일 크기를 확인합니다.
+공개 자료용 파일: `instance/resource-jobs.sqlite3`, `instance/provider-cache.sqlite3`, `instance/artwork/`.
+실제 계정 DB와 분리하며 모두 Git 제외 대상입니다.
+
+시연 준비: `python -m scripts.prepare_catalog --fetch --limit 10`.
+이 명령은 계정에 곡이나 기록을 자동 배정하지 않습니다. `--fetch`가 없으면 확보 상태만 확인합니다.
+실제 외부 검증: `python -m scripts.verify_resource_pipeline`.
+자동화는 97개가 통과했으며 실제 가사·평론·표지 및 새 프로세스에서 HTTP 없는 재사용도 별도로 확인했습니다.
+390×844 브라우저에서 실제 가사 조회·구절 아래 코멘트 저장·북마크·로컬 표지와 평론 표시를 확인했습니다.

@@ -75,7 +75,7 @@ def lookup(song,refresh=False,candidate_id=None):
             return dict(status='available',version_id=existing.id,from_database=True,refresh_failed=True,message='새 가사를 찾지 못해 저장된 가사를 유지했습니다.')
         status='unmatched' if candidates else 'missing'
         save_state(song,status,300)
-        return dict(status='candidates' if candidates else 'missing',message=MESSAGES[status],retry_after=0 if candidates else 300,candidates=[dict(id=int(c['external_id']),title=c['title'],artist=c['artist'],album=c['album'],duration=c['duration'],preview='\n'.join(c['text'].splitlines()[:2])) for c in candidates])
+        return dict(status='candidates' if candidates else 'missing',message=MESSAGES[status],retry_after=0 if candidates else 300,candidates=[dict(id=int(c['external_id']),title=c['title'],artist=c['artist'],album=c['album'],duration=c['duration'],preview='\n'.join(c['text'].splitlines()[:2])[:400]) for c in candidates])
     except ProviderError as error:
         if error.status<500 and error.status!=429:raise
         delay=max(15,error.retry_after)

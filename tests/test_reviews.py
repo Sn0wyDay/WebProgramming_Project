@@ -79,6 +79,21 @@ def test_prior_album_results_are_rechecked_after_artist_alias_resolution():
         assert izm.find('Song','Unrelated','Album',resolve_aliases=lambda:['다른 가수'])==[]
 
 
+def test_metadata_failure_does_not_skip_review_search_with_known_artist_name():
+    article=izm.normalize_search(search_response([raw_row(title='Song',artist='Artist')]))[0]
+    resolver=lambda:(_ for _ in ()).throw(ProviderError('metadata unavailable','provider_rate_limited',503,30))
+    with patch.object(izm.client,'get',side_effect=[[],[article]]) as get:
+        assert izm.find('Song','Artist',resolve_aliases=resolver)[0]['relation']=='song'
+        assert get.call_args_list[-1].args[1]=={'keyword':'Artist'}
+
+
+def test_unresolved_artist_failure_is_not_reported_as_no_review():
+    resolver=lambda:(_ for _ in ()).throw(ProviderError('metadata unavailable','provider_rate_limited',503,30))
+    with patch.object(izm.client,'get',return_value=[]),pytest.raises(ProviderError) as error:
+        izm.find('Song','Artist',resolve_aliases=resolver)
+    assert error.value.retry_after==30
+
+
 @pytest.fixture(scope='module')
 def app(tmp_path_factory):
     app=create_app({'TESTING':True,'SECRET_KEY':'test','SESSION_SQLALCHEMY_TABLE':'review_test_sessions','SQLALCHEMY_DATABASE_URI':'sqlite:///'+str(tmp_path_factory.mktemp('reviews')/'test.db')})

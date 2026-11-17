@@ -1,9 +1,33 @@
 import math
 import re
 import unicodedata
+from flask import current_app,has_app_context
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler,build_opener
 from .http import JsonClient, ProviderError
 
-client = JsonClient('https://lrclib.net', 0.5)
+
+class LyricsRedirects(HTTPRedirectHandler):
+    def redirect_request(self,req,fp,code,msg,headers,newurl):
+        parts=urlsplit(newurl)
+        if parts.scheme!='https' or parts.netloc!='lrclib.net':raise ProviderError('가사 제공처의 연결 주소를 확인하지 못했습니다.')
+        return super().redirect_request(req,fp,code,msg,headers,newurl)
+
+
+class LyricsClient(JsonClient):
+    def headers(self):
+        headers=super().headers()
+        key=current_app.config.get('LRCLIB_API_KEY') if has_app_context() else None
+        if key:headers['Lrclib-Api-Key']=key
+        return headers
+
+    def open(self,request,timeout):
+        if request.get_header('Lrclib-api-key'):
+            return build_opener(LyricsRedirects()).open(request,timeout=timeout)
+        return super().open(request,timeout)
+
+
+client = LyricsClient('https://lrclib.net', 1.05)
 
 
 def normalized(text):
@@ -95,7 +119,33 @@ def search_rows(params):
     return rows
 
 
-def find(title, artist, duration_ms=None, aliases=(), title_aliases=(), album=None):
+def find(title, artist, duration_ms=None, aliases=(), title_aliases=(), album=None,preferred_id=None):
+    queries=list(dict.fromkeys([title]+list(title_aliases)))[:3]
+    def direct(row):
+        if row is None:return None
+        if not isinstance(row,dict):raise ProviderError('가사 직접 조회 응답 형식이 올바르지 않습니다.')
+        for query in queries:
+            parsed=parse_row(row,artist,duration_ms,aliases,album,strict=query!=title)
+            if parsed and titles(query)&titles(parsed['title']) and same_version(query,parsed['title']):
+                if duration_ms and abs(parsed['duration']-duration_ms/1000)>2:continue
+                if album and parsed['album'] and album_key(album)!=album_key(parsed['album']):continue
+                parsed['match_method']='title_alias' if query!=title else 'exact'
+                return parsed
+        return None
+    if preferred_id and str(preferred_id).isdigit():
+        row=client.get('/api/get/'+str(preferred_id))
+        if row is not None and (not isinstance(row,dict) or str(row.get('id'))!=str(preferred_id)):
+            raise ProviderError('가사 제공처의 곡 ID가 일치하지 않습니다.')
+        result=direct(row)
+        if result:return result
+    # A signature lookup does not depend on the provider's search index.
+    # Explicit aliases are tried before any broader search, never guessed.
+    for query in queries:
+        params={'track_name':query,'artist_name':artist}
+        if album:params['album_name']=album
+        if duration_ms and 1000<=duration_ms<=3600000:params['duration']=duration_ms/1000
+        result=direct(client.get('/api/get',params))
+        if result:return result
     def choose(rows,query):
         matches=[]
         for row in rows:
@@ -110,7 +160,7 @@ def find(title, artist, duration_ms=None, aliases=(), title_aliases=(), album=No
             delta=abs(row['duration']-duration_ms/1000) if duration_ms else 0
             return (not album_match,delta,normalized(row['title'])!=normalized(query),int(row['external_id']))
         return min(matches,key=rank) if matches else None
-    for query in list(dict.fromkeys([title]+list(title_aliases)))[:3]:
+    for query in queries:
         result=choose(search_rows({'track_name':query,'artist_name':artist}),query)
         if result:return result
         # The provider's artist filter cannot expand aliases; title-only search

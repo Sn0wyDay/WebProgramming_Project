@@ -148,11 +148,12 @@ from .lyric_service import availability,lookup as lookup_lyrics
 
 def song_summary(s):
     from .providers.coverart import source_url as artwork_source
+    from .artwork_service import image_for
     album=db.session.get(Album,s.album_id) if s.album_id else None
     own=db.session.get(UserSong,(session['user_id'],s.id))
     count=db.session.scalar(db.select(db.func.count(Comment.id)).join(Passage,Comment.passage_id==Passage.id).join(LyricVersion,Passage.version_id==LyricVersion.id).where(LyricVersion.song_id==s.id,Comment.user_id==session['user_id']))
     return dict(id=s.id,title=s.title,artist=s.artist,album=album.title if album else None,
-                album_id=album.id if album else None,image=album.image if album else None,
+                album_id=album.id if album else None,image=image_for(album),
                 artwork_source=artwork_source(album.image) if album else None,rating=own.rating if own else None,
                 saved=bool(own and own.saved),recorded=bool(own and own.recorded),comment_count=count,**availability(s))
 
@@ -198,24 +199,64 @@ def song_reviews(sid):
 @api.post('/songs/<int:sid>/artwork')
 @login_required
 def song_artwork(sid):
-    from .providers import coverart
-    from .providers.http import ProviderError
+    from .artwork_service import lookup
+    return jsonify(lookup(db.get_or_404(Song,sid)))
+
+
+@api.post('/songs/<int:sid>/resources/<kind>')
+@login_required
+def start_resource(sid,kind):
+    from .resource_jobs import queue,response
     song=db.get_or_404(Song,sid)
-    album=db.session.get(Album,song.album_id) if song.album_id else None
-    if not album or album.provider!='musicbrainz':
-        return jsonify(status='missing',image=None,retry_after=300)
-    if album.image:
-        return jsonify(status='available',image=album.image,source_url=coverart.source_url(album.image))
-    try:
-        result=coverart.find(album.external_id)
-    except ProviderError as error:
-        # Optional artwork must not prevent music, lyrics or records from opening.
-        return jsonify(status='unavailable',image=None,message='앨범 표지를 불러오지 못해 기본 이미지를 표시합니다.',retry_after=max(60,error.retry_after))
-    if not result:
-        return jsonify(status='missing',image=None,retry_after=300)
-    album.image=result['image']
-    db.session.commit()
-    return jsonify(status='available',**result)
+    if kind not in ('lyrics','reviews','artwork'):abort(404)
+    data=body();options={}
+    if kind=='lyrics':
+        if set(data)-{'refresh','candidate_id'}:abort(400)
+        if 'refresh' in data and type(data['refresh']) is not bool:abort(400)
+        if 'candidate_id' in data and (type(data['candidate_id']) is not int or data['candidate_id']<=0):abort(400)
+        options=dict(refresh=data.get('refresh',False))
+        if 'candidate_id' in data:options['candidate_id']=data['candidate_id']
+        # Already-saved passages never wait for a queue or an external service.
+        if not options['refresh'] and 'candidate_id' not in options:
+            from .lyric_service import latest
+            version=latest(song)
+            if version:return jsonify(status='completed',result=dict(status='available',version_id=version.id,from_database=True))
+    elif data:abort(400)
+    if kind=='reviews':
+        from .reviews import for_song
+        items=for_song(song)
+        if items:return jsonify(status='completed',result=dict(status='available',reviews=items,from_database=True))
+    if kind=='artwork':
+        from .artwork_service import cached
+        item=cached(song)
+        if item:return jsonify(status='completed',result=item)
+    manager=queue()
+    job=manager.store.submit(sid,kind,options,identity=song.album_id if kind=='artwork' else None)
+    manager.start();manager.wake.set()
+    result=response(job)
+    return jsonify(result),202 if result['status']=='pending' else 200
+
+
+@api.get('/resource-jobs/<job_id>')
+@login_required
+def resource_status(job_id):
+    from .resource_jobs import queue,response
+    if not re.fullmatch('[0-9a-f]{32}',job_id):abort(404)
+    manager=queue();job=manager.store.get(job_id)
+    if not job:abort(404)
+    manager.start()
+    return jsonify(response(job))
+
+
+@api.get('/media/artwork/<name>')
+def cached_artwork(name):
+    from flask import send_file
+    from .artwork_service import cached_file,image_type
+    path=cached_file(name)
+    if not path:abort(404)
+    with path.open('rb') as source:mime=image_type(source.read(16))
+    if not mime:abort(404)
+    return send_file(path,mimetype=mime,conditional=True,max_age=86400)
 
 @api.route('/comments',methods=['GET','POST'])
 @login_required
@@ -305,6 +346,27 @@ def catalog_search():
     except ValueError: abort(400)
     if not 1<=len(query)<=100 or not 1<=page<=100: abort(400)
     return jsonify(musicbrainz.search(query,page))
+
+
+@api.post('/catalog/search-jobs')
+@login_required
+def catalog_search_job():
+    from flask import g
+    from .resource_jobs import queue,response
+    data=body()
+    if set(data)-{'q','page'}:abort(400)
+    query=data.get('q');page=data.get('page',1)
+    if not isinstance(query,str) or not 1<=len(query.strip())<=100 or type(page) is not int or not 1<=page<=100:abort(400)
+    options=dict(query=query.strip(),page=page)
+    saved=musicbrainz.cached_search(**options)
+    if saved is not None:
+        info=getattr(g,'provider_status',{})
+        if info.get('mode')=='stale':
+            manager=queue();manager.store.submit(0,'catalog',options);manager.start();manager.wake.set()
+        return jsonify(status='completed',result={**saved,'_provider_status':info})
+    manager=queue();job=manager.store.submit(0,'catalog',options);manager.start();manager.wake.set()
+    result=response(job)
+    return jsonify(result),202 if result['status']=='pending' else 200
 
 @api.post('/catalog/import')
 @login_required

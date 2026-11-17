@@ -86,7 +86,10 @@ def find(title,artist,album=None,instrumental=False,resolve_aliases=None,title_a
     if found:return list(found.values())[:3]
     for alternate in list(title_aliases)[:1]:search(alternate)
     if found:return list(found.values())[:3]
-    if resolve_aliases and not re.search('[가-힣]',artist):names+=resolve_aliases()
+    alias_error=None
+    if resolve_aliases and not re.search('[가-힣]',artist):
+        try:names+=resolve_aliases()
+        except ProviderError as error:alias_error=error
     names=list(dict.fromkeys(names))
     # Recheck earlier title/album results after their artist aliases are known.
     collect()
@@ -94,4 +97,5 @@ def find(title,artist,album=None,instrumental=False,resolve_aliases=None,title_a
     # IZM indexes Korean artist names. Prefer a provider-verified Korean alias.
     query=next((n for n in names if re.search('[가-힣]',n)),artist)
     search(query)
+    if alias_error and not found:raise alias_error
     return sorted(found.values(),key=lambda row:row['relation']!='song')[:3]

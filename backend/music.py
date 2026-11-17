@@ -1,6 +1,7 @@
 """Import provider-verified metadata and append immutable lyric snapshots."""
 import hashlib
 import json
+import re
 from pathlib import Path
 from sqlalchemy.exc import IntegrityError
 from . import db
@@ -72,8 +73,15 @@ def fetch_lyrics(song, candidate_id=None):
         album=db.session.get(Album,song.album_id) if song.album_id else None
         album_title=album.title if album else None
         # Lyrics depend on LRCLIB only. Optional MusicBrainz hints are cache-only.
+        previous=db.session.scalar(db.select(LyricVersion).where(LyricVersion.song_id==song.id,LyricVersion.provider=='lrclib').order_by(LyricVersion.id.desc()))
+        preferred=re.fullmatch(r'https://lrclib.net/api/get/([1-9][0-9]*)',previous.source_url) if previous else None
+        titles=alternate_titles(song,album_title)
+        if previous and previous.match_method=='user_confirmed' and previous.matched_title:
+            titles=list(dict.fromkeys(titles+[previous.matched_title]))
         result=lrclib.find(song.title,song.artist,song.duration_ms,aliases=artist_aliases(song),
-                          title_aliases=alternate_titles(song,album_title),album=album_title)
+                          title_aliases=titles,album=album_title,preferred_id=preferred[1] if preferred else None)
+        if result and previous and previous.match_method=='user_confirmed' and result.get('title')==previous.matched_title:
+            result['match_method']='user_confirmed'
     if not result:
         return None
     # Store one canonical representation; never edit previous passages.

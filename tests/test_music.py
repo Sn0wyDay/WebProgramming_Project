@@ -10,6 +10,10 @@ from backend.providers.http import JsonClient, ProviderError
 MBID='cf3b2fd9-e6cc-49bf-abf3-63a3af75a6dc'
 META=dict(external_id=MBID,provider='musicbrainz',title='밤편지',artist='IU',album=None,album_id=None,duration_ms=253000)
 
+
+def search_response(rows):
+    return lambda path,params=None:rows if path=='/api/search' else None
+
 @pytest.fixture(autouse=True)
 def isolate_provider_memory():
     musicbrainz.client.cache.clear()
@@ -66,7 +70,7 @@ def test_import_and_immutable_lyrics(app):
 
 def test_lyrics_matches_identity_and_duration():
     row=dict(id=1,trackName='Through the Night (밤편지)',artistName='IU',duration=253,plainLyrics='테스트',instrumental=False)
-    with patch.object(lrclib.client,'get',return_value=[row]):
+    with patch.object(lrclib.client,'get',side_effect=search_response([row])):
         assert lrclib.find('밤편지','IU',253000)['external_id']=='1'
         assert lrclib.find('밤편지','다른 가수',253000) is None
         assert lrclib.find('밤편지','IU',100000) is None
@@ -113,7 +117,7 @@ def test_no_fuzzy_artist_substitution():
 
 def test_lyrics_bilingual_artist_requires_verified_alias():
     row=dict(id=1,trackName='Forever Has Always Been',artistName='Redoor 리도어',duration=240,plainLyrics='테스트',instrumental=False)
-    with patch.object(lrclib.client,'get',return_value=[row]):
+    with patch.object(lrclib.client,'get',side_effect=search_response([row])):
         assert lrclib.find('Forever Has Always Been','Redoor',240000) is None
         assert lrclib.find('Forever Has Always Been','Redoor',240000,aliases=['리도어'])['external_id']=='1'
         assert lrclib.find('Forever Has Always Been','different',240000,aliases=['다른 가수']) is None
@@ -122,6 +126,7 @@ def test_lyrics_bilingual_artist_requires_verified_alias():
 def test_translated_title_requires_known_alias_and_album_duration():
     row=dict(id=37734953,trackName='Shadow of You',artistName='Redoor',albumName='Hospital - EP',duration=256,plainLyrics='테스트 가사')
     def response(path,params):
+        if path=='/api/get':return None
         return [row] if params.get('track_name')=='Shadow of You' else []
     with patch.object(lrclib.client,'get',side_effect=response):
         assert lrclib.find('우리아픈이야기','Redoor',256000) is None
@@ -133,7 +138,7 @@ def test_translated_title_requires_known_alias_and_album_duration():
 
 def test_candidates_are_not_automatic_translation():
     row=dict(id=1,trackName='Unknown English',artistName='Redoor',albumName='Hospital',duration=256,plainLyrics='테스트 가사')
-    with patch.object(lrclib.client,'get',return_value=[row]):
+    with patch.object(lrclib.client,'get',side_effect=search_response([row])):
         assert lrclib.find('다른 한글 제목','Redoor',256000) is None
         assert lrclib.candidates('다른 한글 제목','Redoor','Hospital',256000)[0]['external_id']=='1'
         assert lrclib.candidates('다른 한글 제목','Other Artist','Hospital',256000)==[]
@@ -152,6 +157,7 @@ def test_unverified_titles_need_explicit_candidate_selection(app):
     assert send(c,'/login',data=dict(identifier='music',password='password8')).status_code==200
     row=dict(id=77,trackName='English title',artistName='Test Artist',albumName='Test Album',duration=100,plainLyrics='후보 테스트')
     def response(path,params):
+        if path=='/api/get':return None
         return [row] if params.get('q') else []
     with patch.object(lrclib.client,'get',side_effect=response):
         r=send(c,f'/songs/{sid}/lyrics')
@@ -200,6 +206,7 @@ def test_syringe_resolves_without_musicbrainz_network(app):
     row=dict(id=35646335,trackName='Syringe',artistName='Redoor',albumName='Hospital - EP',duration=264,plainLyrics='검증용 가사')
     def response(path,params):
         assert params.get('q') or params.get('track_name'),'LRCLIB requires q or track_name'
+        if path=='/api/get':return row if params.get('track_name')=='Syringe' else None
         return [row] if params.get('track_name')=='Syringe' else []
     with patch.object(musicbrainz.client,'get',side_effect=ProviderError('MB unavailable','provider_rate_limited',503,30)) as mb,patch.object(lrclib.client,'get',side_effect=response):
         r=send(c,f'/songs/{sid}/lyrics')
@@ -215,6 +222,7 @@ def test_candidate_query_satisfies_provider_contract_even_when_metadata_down(app
     row=dict(id=12345,trackName='Unverified English',artistName='Redoor',albumName='Hospital',duration=263,plainLyrics='후보 검증')
     def response(path,params):
         assert params.get('q') or params.get('track_name')
+        if path=='/api/get':return None
         return [row] if params.get('q')=='Redoor Hospital' else []
     with patch.object(musicbrainz.client,'get',side_effect=AssertionError('No MusicBrainz HTTP needed')) as mb,patch.object(lrclib.client,'get',side_effect=response):
         r=send(c,f'/songs/{sid}/lyrics')

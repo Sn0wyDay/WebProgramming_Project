@@ -3,12 +3,42 @@
    All mutations remain server-owned; this module uses no localStorage. */
 window.REHome=(()=>{
  let api,getUser,current,comments=[],commentPage=0,commentPages=0,homePage=1,viewAll=false;
- let modalPage=1,modalQuery='',modalScope='catalog',candidates=[],pendingSongId=null,renderVersion=0,lyricsBusy=false,lyricsRetryAt=0,lyricsRetryTimer;
+ let modalPage=1,modalQuery='',modalScope='catalog',candidates=[],pendingSongId=null,renderVersion=0,searchVersion=0,lyricsBusy=false,lyricsRetryAt=0,lyricsRetryTimer;
  const root=()=>document.getElementById('main'),dialog=()=>document.getElementById('modal');
  const action=(label,name,id='',className='button outline')=>`<button class="${className}" ${name==='close'?'aria-label="닫기"':''} data-home-action="${name}" data-id="${esc(id)}">${label}</button>`;
  const empty=(title,text,extra='')=>`<div class="empty">${icon('headphones')}<h3>${esc(title)}</h3><p>${esc(text)}</p>${extra}</div>`;
  const stars=(rating=0)=>Array.from({length:5},(_,i)=>`<span class="${i<rating?'filled':''}">${icon('star')}</span>`).join('');
- const cover=s=>typeof s.image==='string'&&/^https?:\/\//.test(s.image)?s.image:'assets/album-placeholder.svg';
+ const cover=s=>typeof s.image==='string'&&(/^https?:\/\//.test(s.image)||/^\/api\/media\/artwork\/[0-9a-f]{64}\.img$/.test(s.image))?s.image:'assets/album-placeholder.svg';
+ const resourcePolls=new Map();
+ function progressMessage(job){return job.retry_after>1?`연결이 지연되어 ${job.retry_after}초 뒤에 자동으로 다시 확인해요.`:job.state==='queued'?'자료를 확인할 차례를 기다리는 중…':'자료를 불러오는 중…';}
+ async function resource(sid,kind,data={},progress=()=>{}){
+  let job=await api(kind==='catalog'?'/catalog/search-jobs':'/songs/'+sid+'/resources/'+kind,'POST',data);
+  if(job.status==='pending'){
+   let pending=resourcePolls.get(job.job_id);
+   if(!pending){
+    const listeners=new Set(),deadline=Date.now()+120000;
+    pending={listeners,promise:(async()=>{
+     while(job.status==='pending'){
+      listeners.forEach(fn=>fn(job));
+      if(Date.now()>deadline){const error=Error('자료 조회가 지연되고 있어요. 잠시 후 다시 열어 주세요.');error.retry_after=15;throw error;}
+      await new Promise(resolve=>setTimeout(resolve,document.hidden?3000:Math.min(1800,job.poll_after_ms||900)));
+      job=await api('/resource-jobs/'+job.job_id);
+     }
+     return job;
+    })()};
+    resourcePolls.set(job.job_id,pending);
+    pending.promise.finally(()=>resourcePolls.delete(job.job_id)).catch(()=>{});
+   }
+   pending.listeners.add(progress);progress(job);
+   try{job=await pending.promise;}finally{pending.listeners.delete(progress);}
+  }
+  if(job.status==='failed'){
+   const result=job.result||{},error=Error(result.error||'자료를 불러오지 못했습니다.');
+   error.code=result.code;error.retry_after=result.retry_after||15;throw error;
+  }
+  if(job.status!=='completed'||!job.result)throw Error('자료 조회 결과를 확인하지 못했습니다.');
+  return job.result;
+ }
  const artworkRequests=new Map();let artworkQueue=Promise.resolve();const imageTimers=new WeakMap();
  function coverImage(s,lazy=false){return `<img src="${esc(cover(s))}" alt="${s.image?esc(s.album||s.title)+' 앨범 표지':'앨범 이미지 없음'}" data-home-cover="${s.album_id||''}" data-cover-song="${Number.isInteger(s.id)?s.id:''}" data-real-cover="${!!s.image}" ${lazy?'loading="lazy"':''}>`;}
  function fallbackCover(img){clearTimeout(imageTimers.get(img));img.classList.remove('artwork-real');img.dataset.realCover='false';img.alt='앨범 이미지 없음';if(!img.getAttribute('src').endsWith('album-placeholder.svg'))img.src='assets/album-placeholder.svg';}
@@ -21,17 +51,17 @@ window.REHome=(()=>{
  document.addEventListener('error',e=>{if(e.target.matches?.('img[data-home-cover]'))fallbackCover(e.target);},true);
  function loadArtwork(container){
   const albums=new Map();
-  container.querySelectorAll('img[data-home-cover]').forEach(img=>{watchCover(img);if(img.dataset.homeCover&&img.dataset.coverSong&&img.dataset.realCover!=='true')albums.set(img.dataset.homeCover,img.dataset.coverSong);});
+  container.querySelectorAll('img[data-home-cover]').forEach(img=>{watchCover(img);if(img.dataset.homeCover&&img.dataset.coverSong&&!img.getAttribute('src').startsWith('/api/media/artwork/'))albums.set(img.dataset.homeCover,img.dataset.coverSong);});
   for(const [albumId,songId] of albums){
    let entry=artworkRequests.get(albumId);
    if(!entry||entry.until<Date.now()){
     entry={until:Infinity};artworkRequests.set(albumId,entry);
-    const run=artworkQueue.then(()=>container.isConnected?api('/songs/'+songId+'/artwork','POST',{}):{status:'skipped',retry_after:0}).catch(()=>({status:'unavailable',retry_after:60}));
-    entry.promise=run.then(data=>{entry.until=Date.now()+(data.image?86400:data.retry_after||0)*1000;return data;});artworkQueue=entry.promise;
+    const run=artworkQueue.then(()=>container.isConnected?resource(songId,'artwork'):{status:'skipped',retry_after:0}).catch(()=>({status:'unavailable',retry_after:60}));
+    entry.promise=run.then(data=>{entry.until=Date.now()+(data.local_cached?86400:data.retry_after||60)*1000;return data;});artworkQueue=entry.promise;
    }
    entry.promise.then(data=>{
     if(!data.image)return;
-    document.querySelectorAll('img[data-home-cover="'+albumId+'"]').forEach(img=>{if(img.dataset.realCover!=='true'){img.dataset.realCover='true';img.alt='앨범 표지';img.src=data.image;watchCover(img);}});
+    document.querySelectorAll('img[data-home-cover="'+albumId+'"]').forEach(img=>{if(img.getAttribute('src')!==data.image){img.dataset.realCover='true';img.alt='앨범 표지';img.src=data.image;watchCover(img);}});
     if(current?.album_id===Number(albumId)){current.image=data.image;current.artwork_source=data.source_url;}
    });
   }
@@ -48,7 +78,7 @@ window.REHome=(()=>{
   const sid=current.id;let entry=reviewRequests.get(sid);
   if(!entry||entry.until<Date.now()){
    entry={until:Infinity};reviewRequests.set(sid,entry);
-   entry.promise=api('/songs/'+sid+'/reviews','POST',{}).catch(()=>({status:'unavailable',reviews:[],retry_after:60})).then(data=>{entry.until=Date.now()+(data.status==='available'?86400:data.retry_after||60)*1000;return data;});
+   entry.promise=resource(sid,'reviews',{},job=>{if(target.isConnected&&current?.id===sid)target.textContent=progressMessage(job);}).catch(()=>({status:'unavailable',reviews:[],retry_after:60})).then(data=>{entry.until=Date.now()+(data.status==='available'?86400:data.retry_after||60)*1000;return data;});
   }
   target.innerHTML='<p class="loading" role="status">평론·선정글을 찾는 중…</p>';notice.innerHTML='';
   const result=await entry.promise;if(!target.isConnected||current?.id!==sid)return;
@@ -111,7 +141,7 @@ window.REHome=(()=>{
   }catch(error){if(version===renderVersion)root().innerHTML=errorHtml(error,action('다시 불러오기','home-retry'));}
  }
  async function addModal(){
-  modalPage=1;modalQuery='';
+  modalPage=1;modalQuery='';searchVersion++;
   modal('기록을 추가할 음악 선택',`<form class="home-add-search" data-home-form="search"><div class="search-box add-search">${icon('search')}<input type="search" name="q" aria-label="음악 검색" maxlength="100" placeholder="곡 제목 또는 아티스트 검색" required><button class="button dark" type="submit">검색</button></div><label class="home-search-scope">검색 범위 <select name="scope" class="select"><option value="catalog">외부 음악</option><option value="local">저장된 음악·가사</option></select></label></form><div id="home-search-status" role="status"></div><div id="home-add-results" class="add-results"></div><p class="inline-warning">이미 추가한 음악은 인터넷 연결 없이 열 수 있습니다. 외부 검색은 검색 버튼을 눌렀을 때만 요청합니다.</p>`);
   const target=document.getElementById('home-add-results');
   try{const data=await api('/songs');if(target.isConnected)target.innerHTML=searchRows(data.items,false)||empty('첫 음악을 찾아보세요','곡 제목 또는 아티스트를 입력해 주세요.');}
@@ -122,13 +152,28 @@ window.REHome=(()=>{
  function searchRows(items,external){return items.map(s=>`<button class="add-result" data-home-action="select-song" data-id="${esc(external?s.external_id:s.id)}" data-external="${external}">${coverImage(s,true)}<span><strong>${esc(s.title)}</strong><small>${esc(s.artist)}${s.album?' · '+esc(s.album):''}</small>${lyricBadge(s)}</span>${icon('plus')}</button>`).join('');}
  async function search(){
   const target=document.getElementById('home-add-results'),status=document.getElementById('home-search-status');if(!target||!status)return;
+  const version=++searchVersion,query=modalQuery,page=modalPage,scope=modalScope;
+  const active=()=>target.isConnected&&dialog().open&&version===searchVersion;
   status.textContent='음악 검색 중…';
   try{
-   const result=await api((modalScope==='catalog'?'/catalog/search':'/songs')+'?q='+encodeURIComponent(modalQuery)+'&page='+modalPage);
-   if(!target.isConnected)return;
-   status.innerHTML=providerNotice(result)+(result.matched_artists?.length?`<p class="small-muted">${esc(modalQuery)} → ${esc(result.matched_artists.join(', '))}</p>`:'');
-   target.innerHTML=(searchRows(result.items,modalScope==='catalog')||empty('검색 결과가 없어요','다른 곡명이나 가수명으로 검색해 보세요.'))+pages(modalPage,result.pages,'search');loadArtwork(target);
-  }catch(error){if(target.isConnected){status.innerHTML=errorHtml(error);target.innerHTML=action('다시 검색','search-retry')+action('저장된 음악 보기','local-list');if(error.retry_after){const b=target.querySelector('button');b.disabled=true;setTimeout(()=>{if(b.isConnected)b.disabled=false;},error.retry_after*1000);}}}
+   const result=scope==='catalog'?await resource(0,'catalog',{q:query,page},job=>{if(active())status.textContent=progressMessage(job);}):await api('/songs?q='+encodeURIComponent(query)+'&page='+page);
+   if(!active())return;
+   status.innerHTML=providerNotice(result)+(result.matched_artists?.length?`<p class="small-muted">${esc(query)} → ${esc(result.matched_artists.join(', '))}</p>`:'');
+   target.innerHTML=(searchRows(result.items,scope==='catalog')||empty('검색 결과가 없어요','다른 곡명이나 가수명으로 검색해 보세요.'))+pages(page,result.pages,'search');loadArtwork(target);
+  }catch(error){if(active()){
+   status.innerHTML=errorHtml(error);
+   let saved='',label='저장된 음악에서 찾은 결과';
+   if(scope==='catalog'){
+    try{
+     let local=await api('/songs?q='+encodeURIComponent(query));
+     if(!local.items.length){local=await api('/songs');label='바로 열 수 있는 저장된 음악';}
+     if(local.items.length)saved=`<h3>${label}</h3>`+searchRows(local.items,false);
+    }catch{}
+   }
+   if(!active())return;
+   target.innerHTML=action('다시 검색','search-retry')+action('저장된 음악 보기','local-list')+saved;loadArtwork(target);
+   if(error.retry_after){const b=target.querySelector('button');b.disabled=true;setTimeout(()=>{if(b.isConnected)b.disabled=false;},error.retry_after*1000);}
+  }}
  }
  function inlineNote(c){return `<article class="inline-note" data-comment-id="${c.id}"><div class="note-person"><span class="avatar mine">${c.user.id===getUser().id?'나':esc(c.user.name.slice(0,1))}</span><strong>${esc(c.user.name)}</strong><span class="pill">${c.visibility==='private'?'나만 보기':'친구 공개'}</span><time>${esc(date(c.created_at))}</time></div><p>${esc(c.text)}</p>${c.user.id===getUser().id?`<div class="note-actions">${action('수정','edit-comment',c.id,'')}${action('삭제','delete-comment',c.id,'')}</div>`:''}</article>`;}
  function lyricRows(){return `<ol class="lyric-list">${current.passages.map((p,i)=>`<li class="line-wrapper" id="home-line-${p.id}"><button class="lyric-line" data-home-action="line" data-id="${p.id}" aria-expanded="false" aria-controls="home-editor-${p.id}"><span class="line-number">${String(i+1).padStart(2,'0')}</span><span>${esc(p.text)}</span></button><div class="inline-notes" id="home-notes-${p.id}" aria-live="polite"></div><div id="home-editor-${p.id}"></div></li>`).join('')}</ol>`;}
@@ -166,7 +211,7 @@ window.REHome=(()=>{
   if([...root().querySelectorAll('[data-home-form="comment"] textarea')].some(t=>t.value.trim())){toast('작성 중인 감상을 먼저 저장해 주세요.');return;}
   const sid=current.id;lyricsBusy=true;syncLyricButtons();target.textContent='가사를 조회하는 중…';
   try{
-   const result=await api('/songs/'+sid+'/lyrics','POST',candidateId?{candidate_id:candidateId}:{refresh});
+   const result=await resource(sid,'lyrics',candidateId?{candidate_id:candidateId}:{refresh},job=>{if(target.isConnected&&current?.id===sid)target.textContent=progressMessage(job);});
    if(!target.isConnected||current.id!==sid)return;
    candidates=result.candidates||[];let html=providerNotice(result);
    if(result.message)html+=`<p>${esc(result.message)}</p>`;

@@ -47,6 +47,12 @@ def create_app(config=None):
             raise RuntimeError('로컬 세션 키 파일이 비어 있습니다.')
     # Cache public provider data only; never sessions or personal comments.
     app.config.setdefault('PROVIDER_CACHE_PATH', None if app.testing else str(Path(app.instance_path)/'provider-cache.sqlite3'))
+    app.config.setdefault('RESOURCE_JOB_PATH',str(Path(app.instance_path)/'resource-jobs.sqlite3'))
+    app.config.setdefault('ARTWORK_CACHE_PATH',str(Path(app.instance_path)/'artwork'))
+    app.config.setdefault('ARTWORK_DOWNLOAD_ENABLED',not app.testing)
+    app.config.setdefault('LRCLIB_API_KEY',os.getenv('LRCLIB_API_KEY',''))
+    from .resource_jobs import ResourceQueue
+    app.extensions['resource_queue']=ResourceQueue(app)
     @app.before_request
     def provider_budget():
         g.provider_deadline=time.monotonic()+18

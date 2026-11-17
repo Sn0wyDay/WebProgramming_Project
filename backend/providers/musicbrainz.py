@@ -1,5 +1,6 @@
 import re
 import unicodedata
+import hashlib
 from .http import JsonClient, ProviderError
 from .versions import is_instrumental
 
@@ -24,6 +25,14 @@ def normalize(record):
 
 def name_key(text):
     return ''.join(c for c in unicodedata.normalize('NFKC', text).casefold() if c.isalnum())
+
+
+def search_key(query,page):
+    return 'search-result:'+hashlib.sha256(f'{page}:{unicodedata.normalize("NFKC",query).casefold().strip()}'.encode()).hexdigest()
+
+
+def cached_search(query,page=1):
+    return client.recall(search_key(query,page))
 
 
 def exact_artists(query):
@@ -73,7 +82,9 @@ def search(query, page=1):
     source_mode=getattr(g,'provider_status',{}).get('mode') if has_request_context() else None
     if source_mode not in ('cache','stale'):
         for item in items:client.remember(item['external_id'],item)
-    return dict(items=items, page=page, pages=(total+19)//20, total=total, matched_artists=[a['name'] for a in matched_artists])
+    response=dict(items=items, page=page, pages=(total+19)//20, total=total, matched_artists=[a['name'] for a in matched_artists])
+    if source_mode!='stale':client.remember(search_key(query,page),response)
+    return response
 
 
 def lookup(external_id):

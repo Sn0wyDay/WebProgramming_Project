@@ -77,7 +77,7 @@ class JsonClient:
         return self.cache.get((namespace,key))
 
     def _write(self,key,value,store):
-        negative=value is None or value==[] or (isinstance(value,dict) and value.get('count') in (0,'0'))
+        negative=value is None or value==[] or (isinstance(value,dict) and (value.get('count') in (0,'0') or value.get('total') in (0,'0')))
         ttl=300 if negative else self.ttl
         stale=ttl if negative else self.stale_ttl
         if store:store.write(self.base+key,value,ttl,stale)
@@ -86,6 +86,15 @@ class JsonClient:
             self.cache[(namespace,key)]=dict(value=value,saved=time.time(),expires=time.time()+ttl,stale_until=time.time()+stale)
             self.cache.move_to_end((namespace,key))
             while len(self.cache)>128:self.cache.popitem(last=False)
+
+    def open(self,request,timeout):
+        return urlopen(request,timeout=timeout)
+
+    def decode(self,raw,key,headers):
+        return json.loads(raw)
+
+    def headers(self):
+        return {'User-Agent':USER_AGENT,'Accept':'application/json'}
 
     def get(self,path,params=None):
         key=path+('?' + urlencode(sorted(params.items())) if params else '')
@@ -128,13 +137,18 @@ class JsonClient:
                 if store:store.started(self.base,token,self.interval)
                 else:self.next_request=time.time()+self.interval
                 try:
-                    req=Request(self.base+key,headers={'User-Agent':USER_AGENT,'Accept':'application/json'})
-                    with urlopen(req,timeout=min(5,remaining-wait)) as response:raw=response.read(2_000_001)
+                    req=Request(self.base+key,headers=self.headers())
+                    started=time.monotonic()
+                    with self.open(req,timeout=min(5,remaining-wait)) as response:
+                        raw=response.read(2_000_001)
+                        headers=getattr(response,'headers',{})
                     if len(raw)>2_000_000:raise ValueError('oversized response')
-                    result=json.loads(raw)
+                    result=self.decode(raw,key,headers)
                     if self.transform:result=self.transform(result)
+                    if has_app_context():current_app.logger.info('provider=%s path=%s status=200 seconds=%.2f',self.base,path,time.monotonic()-started)
                     self._write(key,result,store);report('live');return result
                 except HTTPError as error:
+                    if has_app_context():current_app.logger.warning('provider=%s path=%s status=%s',self.base,path,error.code)
                     if error.code==404:self._write(key,None,store);report('live');return None
                     if error.code in (429,503):
                         cooldown=retry_seconds(error.headers.get('Retry-After'))
