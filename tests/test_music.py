@@ -164,3 +164,13 @@ def test_verified_title_rule_is_bound_to_identity():
         assert alternate_titles(song,'Other Album')==[]
         song.artist='Other Artist'
         assert alternate_titles(song,'Hospital')==[]
+
+def test_album_cover_prefers_stored_image_then_cover_art_archive():
+    from backend.models import Album
+    from backend.routes import album_cover
+    assert album_cover(None) is None
+    release=Album(provider='musicbrainz',external_id='0f1e2d3c-0000-4000-8000-000000000000',title='Blue Hour',artist='유월')
+    assert album_cover(release)=='https://coverartarchive.org/release/0f1e2d3c-0000-4000-8000-000000000000/front-500'
+    release.image='https://example.test/cover.jpg'
+    assert album_cover(release)=='https://example.test/cover.jpg'
+    assert album_cover(Album(provider='fixture',external_id='x',title='t',artist='a')) is None

@@ -153,6 +153,13 @@ def songs():
     result=page_query(stmt.order_by(Song.id))
     return jsonify(items=[dict(id=s.id,title=s.title,artist=s.artist) for s in result.items],pages=result.pages,notice='저장된 곡·가수·가사 검색입니다.')
 
+def album_cover(album):
+    """앨범 표지 주소. 저장된 이미지가 없으면 MusicBrainz 발매 ID로 Cover Art Archive 표지를 씁니다."""
+    if not album: return None
+    if album.image: return album.image
+    if album.provider=='musicbrainz' and album.external_id: return f'https://coverartarchive.org/release/{album.external_id}/front-500'
+    return None
+
 @api.get('/songs/<int:sid>')
 @login_required
 def song_detail(sid):
@@ -162,7 +169,7 @@ def song_detail(sid):
     passages=db.session.scalars(db.select(Passage).where(Passage.version_id==version.id).order_by(Passage.position)).all() if version else []
     reviews=db.session.scalars(db.select(Review).where(Review.song_id==sid)).all()
     album=db.session.get(Album,s.album_id) if s.album_id else None
-    return jsonify(id=s.id,title=s.title,artist=s.artist,album=album.title if album else None,provider=s.provider,external_id=s.external_id,lyrics_status='available' if passages else 'missing',passages=[dict(id=p.id,text=p.text,version_id=p.version_id) for p in passages],source_url=version.source_url if version else None,lyrics_title=version.matched_title if version else None,lyrics_match=version.match_method if version else None,reviews=[dict(title=r.title,author=r.author,url=r.url,source=db.session.get(ReviewSource,r.source_id).name,introduction=r.introduction) for r in reviews])
+    return jsonify(id=s.id,title=s.title,artist=s.artist,album=album.title if album else None,cover=album_cover(album),provider=s.provider,external_id=s.external_id,lyrics_status='available' if passages else 'missing',passages=[dict(id=p.id,text=p.text,version_id=p.version_id) for p in passages],source_url=version.source_url if version else None,lyrics_title=version.matched_title if version else None,lyrics_match=version.match_method if version else None,reviews=[dict(title=r.title,author=r.author,url=r.url,source=db.session.get(ReviewSource,r.source_id).name,introduction=r.introduction) for r in reviews])
 
 @api.route('/comments',methods=['GET','POST'])
 @login_required
