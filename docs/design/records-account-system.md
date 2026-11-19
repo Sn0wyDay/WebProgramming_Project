@@ -1,4 +1,31 @@
-# RE:VERSE — A+D mix system ("Clean Diary")
+# 나의 기록·내 계정 디자인 규칙
+
+## 앱 적용 기준 (2026-11-19, 이 절이 아래 내용보다 우선)
+
+아래 영문 규칙은 디자인 시안(A+D 혼합안)을 만들 때의 원본입니다.
+앱에 넣으면서 홈·친구 등 다른 페이지와 느낌을 맞추려고 색과 세부 모양을 main의 초록 디자인(`dist/style.css`의 `:root`)에 맞췄습니다.
+구조(날짜 여백, 큰 커버, 탭·레일, 계정 3구역, 메뉴 동작)는 그대로입니다.
+
+| 항목 | 원본 시안 | 앱 적용 |
+| --- | --- | --- |
+| 배경 | 흰색 `#ffffff` | 다른 페이지와 같은 `--paper` `#f7f9f5` |
+| 강조색 | 분홍 `#d41352` | `--accent` `#5d7c53`, 눌림 `--accent-dark` `#2f4b36` |
+| 글자색 | `#16181c` 계열 | `--ink` `#25352c`, 보조 `#5d6b4f`, 흐림 `--muted` `#798779` |
+| 구분선 | `#e6e8eb` | `--line` `#e1e8dc` |
+| 제목(h1) | 40px | 홈과 같은 32px, 자간 -1.5px (모바일 25px) |
+| 가사 구절 | 명조체 22px | 본문 글꼴 20px, 초록 왼쪽 선(곡 상세의 선택 구절과 같은 모양) |
+| 커버 모서리 | 모두 6px | 큰 커버·타일 12px, 작은 커버 8px (홈 카드와 같음) |
+| 표지 없음 | 글자 타일 | 홈과 같은 `assets/album-placeholder.svg` |
+| 탭 | 회색 트랙 + 흰 선택칸 | 흰 상자 + 상단 메뉴와 같은 연초록 선택칸 `#e5eedb` |
+| 검색·이름 입력 | 회색 채움 | 흰 바탕 + `#dce5d5` 테두리 (main의 `.search-box`, `.field`) |
+| 프로필 사진 | 글자 원 | 헤더와 같은 그라데이션 오브 |
+| 저장·취소 버튼 | 글자 버튼 | main의 `.button.dark` / `.button.subtle` 모양 |
+
+실제 표지로 인정하는 주소는 홈(`dist/home.js`)과 같습니다: `http(s)://` 주소 또는 `/api/media/artwork/<hash>.img`.
+
+---
+
+## 원본 시안 규칙: RE:VERSE — A+D mix system ("Clean Diary")
 
 Builders follow this exactly. Canvas file rules in BRIEF.md still apply (support.js, one css2 link in `<helmet>`, inline styles, inline stroke SVG icons, real elements, no emoji, contrast ≥ 4.5:1).
 

@@ -21,7 +21,6 @@ const card=s=>`<article class="song-card panel"><a class="song-title" href="#son
 
 const note=c=>`<article class="saved-note"><strong>${esc(c.user.name)}</strong><time> · ${esc(new Date(c.created_at).toLocaleString('ko-KR'))}</time><span class="pill">${c.visibility==='private'?'나만 보기':'친구 공개'}</span><blockquote>${esc(c.quote)}</blockquote><p>${esc(c.text)}</p><a href="#song/${c.song_id}">곡 보기</a>${c.user.id===user.id?btn('수정','edit',c.id)+btn('삭제','delete',c.id):''}</article>`;
 const PAGE_SIZE=20;
-const initial=name=>Array.from(String(name??'').trim())[0]||'나';
 function toast(text){const t=document.querySelector('#toast');t.textContent=text;t.classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.classList.remove('visible'),2400);}
 async function commentSummary(){
  const first=await api('/comments'),recent=first.items.slice(0,3);
@@ -39,15 +38,16 @@ const allRecords=()=>allPages('/records');
 const songCache=new Map();
 async function songMap(ids){
  const missing=[...new Set(ids)].filter(id=>!songCache.has(id));
- await Promise.all(missing.map(id=>api('/songs/'+id).then(s=>songCache.set(id,{id:s.id,title:s.title,artist:s.artist,album:s.album,cover:s.image||null})).catch(()=>{})));
+ await Promise.all(missing.map(id=>api('/songs/'+id).then(s=>songCache.set(id,{id:s.id,title:s.title,artist:s.artist,album:s.album,cover:realCover(s.image)})).catch(()=>{})));
  return Object.fromEntries(ids.filter(id=>songCache.has(id)).map(id=>[id,songCache.get(id)]));
 }
 const ORB_TONES=['sky','dawn','dusk','mint','honey'];
 const orbClass=id=>`orb orb-${ORB_TONES[(Math.max(1,Number(id)||1)-1)%ORB_TONES.length]}`;
 // 나의 기록·내 계정 화면. 디자인 규칙: docs/design/records-account-system.md
-const COVER_TONES=['sage','sand','sky','rose','lilac'];
-const coverTone=s=>COVER_TONES[(s?.id||0)%COVER_TONES.length];
-const coverTile=(s,size)=>`<span class="rv-cover ${size} rv-tile tone-${coverTone(s)}" aria-hidden="true">${esc(initial(s?.title||'♪'))}</span>`;
+// 홈(home.js)과 같은 기준: 외부 표지 주소나 서버에 저장한 표지만 실제 표지로 씁니다. 나머지는 홈과 같은 기본 커버를 씁니다.
+const realCover=image=>typeof image==='string'&&(/^https?:\/\//.test(image)||/^\/api\/media\/artwork\/[0-9a-f]{64}\.img$/.test(image))?image:null;
+const PLACEHOLDER='assets/album-placeholder.svg';
+const coverTile=(s,size)=>`<img class="rv-cover ${size} rv-placeholder" src="${PLACEHOLDER}" alt="" aria-hidden="true">`;
 // 표지를 불러오지 못하면 error 핸들러가 글자 타일로 바꿉니다.
 const cover=(s,size='')=>s?.cover?`<img class="rv-cover ${size}" src="${esc(s.cover)}" alt="" loading="lazy" decoding="async" data-song="${esc(s.id)}">`:coverTile(s,size);
 const visLabel=v=>v==='private'?'나만 보기':'친구 공개';
@@ -91,7 +91,7 @@ async function account(){
  main.innerHTML=`<div class="rv rv-account">
  <div class="rv-head"><h1>내 계정</h1></div>
  <div class="rv-layout rv-layout-account">
- <section class="rv-side-top" aria-label="프로필"><div class="rv-profile"><span class="rv-avatar" aria-hidden="true">${esc(initial(user.name))}</span><div class="rv-identity"><p class="rv-name">${esc(user.name)}</p><p class="rv-handle">@${esc(user.username)}</p></div></div>
+ <section class="rv-side-top" aria-label="프로필"><div class="rv-profile"><span class="rv-avatar avatar ${orbClass(user.id)}" aria-hidden="true"></span><div class="rv-identity"><p class="rv-name">${esc(user.name)}</p><p class="rv-handle">@${esc(user.username)}</p></div></div>
   <nav class="rv-stats" aria-label="내 활동">${stats.map(([n,label,href])=>`<a href="${href}"><b>${n===undefined?'—':n}</b>${label}</a>`).join('')}</nav></section>
  <div class="rv-main rv-stack">
   ${albums.length?`<section aria-labelledby="fav-title">${sectionHead('fav-title','즐겨 듣는 앨범')}<div class="rv-grid cols-3">${albums.map(a=>songTile('#song/'+a.s.id,a.s,a.s.album,a.s.artist)).join('')}</div></section>`:''}
@@ -241,7 +241,7 @@ document.addEventListener('keydown',e=>{
 });
 // 앨범 표지를 불러오지 못하면 같은 자리에 글자 타일을 놓고, 그 곡은 다시 요청하지 않습니다.
 document.addEventListener('error',e=>{
- const img=e.target;if(!(img instanceof HTMLImageElement)||!img.classList.contains('rv-cover'))return;
+ const img=e.target;if(!(img instanceof HTMLImageElement)||!img.classList.contains('rv-cover')||img.classList.contains('rv-placeholder'))return;
  const s=songCache.get(Number(img.dataset.song));if(s)s.cover=null;
  const size=[...img.classList].find(c=>c!=='rv-cover')||'';
  img.outerHTML=coverTile(s||{title:'♪'},size);
