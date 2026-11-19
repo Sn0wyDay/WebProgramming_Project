@@ -26,6 +26,7 @@ class Song(db.Model):
     external_id = db.Column(db.String(100), nullable=False)
     title = db.Column(db.String(255), nullable=False)
     artist = db.Column(db.String(255), nullable=False)
+    is_instrumental = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     duration_ms = db.Column(db.Integer)
     album_id = db.Column(db.Integer, db.ForeignKey('album.id'))
     __table_args__ = (db.UniqueConstraint('provider', 'external_id'),)
@@ -59,6 +60,7 @@ class Comment(db.Model):
 class UserSong(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), primary_key=True)
     song_id = db.Column(db.Integer, db.ForeignKey('song.id'), primary_key=True)
+    recorded_at = db.Column(db.DateTime)
     rating = db.Column(db.Integer)
     saved = db.Column(db.Boolean, default=False, nullable=False)
     recorded = db.Column(db.Boolean, default=False, nullable=False)
@@ -83,3 +85,28 @@ class Review(db.Model):
     author = db.Column(db.String(255), nullable=False)
     url = db.Column(db.String(1000), nullable=False, unique=True)
     introduction = db.Column(db.Text)
+    article_type = db.Column(db.String(16),nullable=False,default='review',server_default='review')
+    __table_args__ = (db.CheckConstraint("article_type IN ('review','selection')"),)
+
+
+class ReviewLink(db.Model):
+    """One article can review an album containing several catalog songs."""
+    song_id = db.Column(db.Integer, db.ForeignKey('song.id'), primary_key=True)
+    review_id = db.Column(db.Integer, db.ForeignKey('review.id'), primary_key=True, index=True)
+    kind = db.Column(db.String(16), nullable=False)
+    context = db.Column(db.String(500))
+    __table_args__ = (db.CheckConstraint("kind IN ('song','album','album_track')"),)
+
+
+class LyricLookup(db.Model):
+    """Public lookup state; a temporary error never becomes 'lyrics missing'."""
+    song_id = db.Column(db.Integer, db.ForeignKey('song.id'), primary_key=True)
+    status = db.Column(db.String(24), nullable=False)
+    checked_at = db.Column(db.DateTime, nullable=False, default=now)
+    retry_at = db.Column(db.DateTime)
+    error_code = db.Column(db.String(40))
+
+
+class TeamProfile(db.Model):
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), primary_key=True)
+    song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=False)

@@ -1,8 +1,9 @@
 import os
 import secrets
+import time
 from pathlib import Path
 from datetime import timedelta
-from flask import Flask, jsonify
+from flask import Flask, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_session import Session
@@ -44,6 +45,17 @@ def create_app(config=None):
         app.config['SECRET_KEY'] = key_path.read_text().strip()
         if not app.config['SECRET_KEY']:
             raise RuntimeError('로컬 세션 키 파일이 비어 있습니다.')
+    # Cache public provider data only; never sessions or personal comments.
+    app.config.setdefault('PROVIDER_CACHE_PATH', None if app.testing else str(Path(app.instance_path)/'provider-cache.sqlite3'))
+    app.config.setdefault('RESOURCE_JOB_PATH',str(Path(app.instance_path)/'resource-jobs.sqlite3'))
+    app.config.setdefault('ARTWORK_CACHE_PATH',str(Path(app.instance_path)/'artwork'))
+    app.config.setdefault('ARTWORK_DOWNLOAD_ENABLED',not app.testing)
+    app.config.setdefault('LRCLIB_API_KEY',os.getenv('LRCLIB_API_KEY',''))
+    from .resource_jobs import ResourceQueue
+    app.extensions['resource_queue']=ResourceQueue(app)
+    @app.before_request
+    def provider_budget():
+        g.provider_deadline=time.monotonic()+18
     db.init_app(app)
     from . import models
     app.config['SESSION_SQLALCHEMY'] = db
@@ -59,6 +71,11 @@ def create_app(config=None):
     def headers(response):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Cache-Control'] = 'no-store'
+        if getattr(g,'provider_status',None) and response.is_json:
+            payload=response.get_json()
+            if isinstance(payload,dict):
+                payload['_provider_status']=g.provider_status
+                response.set_data(app.json.dumps(payload))
         return response
     from werkzeug.exceptions import HTTPException
     @app.errorhandler(HTTPException)

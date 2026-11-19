@@ -41,6 +41,9 @@ def register():
     except IntegrityError:
         db.session.rollback()
         return jsonify(error='이미 사용 중인 이메일 또는 아이디입니다.'),409
+    from .team import connect_team
+    connect_team(user.id)
+    db.session.commit()
     return jsonify(user=public(user)),201
 
 @api.post('/login')
@@ -75,7 +78,7 @@ def profile():
     db.session.commit()
     return jsonify(user=public(user))
 
-from .models import Album, Song, Passage, LyricVersion, Comment, UserSong, Friendship, Review, ReviewSource
+from .models import now, Album, Song, Passage, LyricVersion, Comment, UserSong, Friendship, Review, ReviewSource
 from flask import abort
 
 def body():
@@ -99,7 +102,8 @@ def visible(comment):
 def comment_json(c):
     p=db.session.get(Passage,c.passage_id)
     v=db.session.get(LyricVersion,p.version_id)
-    return dict(id=c.id,user=public(db.session.get(User,c.user_id)),song_id=v.song_id,passage_id=p.id,quote=p.text,text=c.text,visibility=c.visibility,created_at=c.created_at.isoformat()+'Z')
+    song = db.session.get(Song, v.song_id)
+    return dict(song_title=song.title, song_artist=song.artist,id=c.id,user=public(db.session.get(User,c.user_id)),song_id=v.song_id,passage_id=p.id,quote=p.text,text=c.text,visibility=c.visibility,created_at=c.created_at.isoformat()+'Z')
 
 def page_query(stmt):
     try: page=max(1,int(request.args.get('page',1)))
@@ -114,7 +118,12 @@ def users():
     stmt=db.select(User).where(User.id!=session['user_id'])
     if q: stmt=stmt.where(db.or_(User.name.contains(q,autoescape=True),User.username.contains(q,autoescape=True)))
     result=page_query(stmt.order_by(User.id))
-    return jsonify(items=[public(u) for u in result.items],pages=result.pages)
+    items = []
+    relations = db.session.scalars(db.select(Friendship).where(db.or_(Friendship.low_id==session['user_id'], Friendship.high_id==session['user_id']))).all()
+    states = {(r.high_id if r.low_id==session['user_id'] else r.low_id): ('accepted' if r.accepted else 'outgoing' if r.requester_id==session['user_id'] else 'incoming') for r in relations}
+    for u in result.items:
+        items.append(dict(**public(u), status=states.get(u.id, 'none')))
+    return jsonify(items=items,pages=result.pages)
 
 @api.route('/friends/<int:other>',methods=['POST','PATCH','DELETE'])
 @login_required
@@ -144,6 +153,31 @@ def friend_list():
     rows=db.session.scalars(db.select(Friendship).where(db.or_(Friendship.low_id==uid,Friendship.high_id==uid))).all()
     return jsonify(items=[dict(user=public(db.session.get(User,r.high_id if r.low_id==uid else r.low_id)),status='accepted' if r.accepted else ('outgoing' if r.requester_id==uid else 'incoming')) for r in rows])
 
+from .lyric_service import availability,lookup as lookup_lyrics
+
+def song_summary(s):
+    from .providers.coverart import source_url as artwork_source
+    from .artwork_service import image_for
+    album=db.session.get(Album,s.album_id) if s.album_id else None
+    own=db.session.get(UserSong,(session['user_id'],s.id))
+    count=db.session.scalar(db.select(db.func.count(Comment.id)).join(Passage,Comment.passage_id==Passage.id).join(LyricVersion,Passage.version_id==LyricVersion.id).where(LyricVersion.song_id==s.id,Comment.user_id==session['user_id']))
+    return dict(id=s.id,title=s.title,artist=s.artist,album=album.title if album else None,
+                album_id=album.id if album else None,image=image_for(album),
+                artwork_source=artwork_source(album.image) if album else None,rating=own.rating if own else None,
+                saved=bool(own and own.saved),recorded=bool(own and own.recorded),comment_count=count,**availability(s))
+
+
+@api.get('/home')
+@login_required
+def home_data():
+    uid=session['user_id']
+    commented=db.select(LyricVersion.song_id).join(Passage,Passage.version_id==LyricVersion.id).join(Comment,Comment.passage_id==Passage.id).where(Comment.user_id==uid)
+    stmt=db.select(Song).outerjoin(UserSong,db.and_(UserSong.song_id==Song.id,UserSong.user_id==uid)).where(db.or_(UserSong.recorded.is_(True),Song.id.in_(commented))).order_by(UserSong.recorded_at.desc(),Song.id.desc())
+    result=page_query(stmt)
+    note_count=db.session.scalar(db.select(db.func.count(Comment.id)).where(Comment.user_id==uid))
+    return jsonify(items=[song_summary(s) for s in result.items],pages=result.pages,total=result.total,comment_count=note_count)
+
+
 @api.get('/songs')
 @login_required
 def songs():
@@ -151,14 +185,7 @@ def songs():
     stmt=db.select(Song)
     if q: stmt=stmt.where(db.or_(Song.title.contains(q,autoescape=True),Song.artist.contains(q,autoescape=True),Song.id.in_(db.select(LyricVersion.song_id).join(Passage,Passage.version_id==LyricVersion.id).where(Passage.text.contains(q,autoescape=True)))))
     result=page_query(stmt.order_by(Song.id))
-    return jsonify(items=[dict(id=s.id,title=s.title,artist=s.artist) for s in result.items],pages=result.pages,notice='저장된 곡·가수·가사 검색입니다.')
-
-def album_cover(album):
-    """앨범 표지 주소. 저장된 이미지가 없으면 MusicBrainz 발매 ID로 Cover Art Archive 표지를 씁니다."""
-    if not album: return None
-    if album.image: return album.image
-    if album.provider=='musicbrainz' and album.external_id: return f'https://coverartarchive.org/release/{album.external_id}/front-500'
-    return None
+    return jsonify(items=[song_summary(s) for s in result.items],pages=result.pages,notice='저장된 곡·가수·가사 검색입니다.')
 
 @api.get('/songs/<int:sid>')
 @login_required
@@ -167,9 +194,78 @@ def song_detail(sid):
     versions=db.session.scalars(db.select(LyricVersion).where(LyricVersion.song_id==sid).order_by(LyricVersion.id.desc())).all()
     version=versions[0] if versions else None
     passages=db.session.scalars(db.select(Passage).where(Passage.version_id==version.id).order_by(Passage.position)).all() if version else []
-    reviews=db.session.scalars(db.select(Review).where(Review.song_id==sid)).all()
-    album=db.session.get(Album,s.album_id) if s.album_id else None
-    return jsonify(id=s.id,title=s.title,artist=s.artist,album=album.title if album else None,cover=album_cover(album),provider=s.provider,external_id=s.external_id,lyrics_status='available' if passages else 'missing',passages=[dict(id=p.id,text=p.text,version_id=p.version_id) for p in passages],source_url=version.source_url if version else None,lyrics_title=version.matched_title if version else None,lyrics_match=version.match_method if version else None,reviews=[dict(title=r.title,author=r.author,url=r.url,source=db.session.get(ReviewSource,r.source_id).name,introduction=r.introduction) for r in reviews])
+    from .reviews import for_song
+    return jsonify(**song_summary(s),provider=s.provider,external_id=s.external_id,passages=[dict(id=p.id,text=p.text,version_id=p.version_id) for p in passages],source_url=version.source_url if version else None,lyrics_title=version.matched_title if version else None,lyrics_match=version.match_method if version else None,reviews=for_song(s))
+
+
+@api.post('/songs/<int:sid>/reviews')
+@login_required
+def song_reviews(sid):
+    from .reviews import lookup
+    return jsonify(lookup(db.get_or_404(Song,sid)))
+
+
+@api.post('/songs/<int:sid>/artwork')
+@login_required
+def song_artwork(sid):
+    from .artwork_service import lookup
+    return jsonify(lookup(db.get_or_404(Song,sid)))
+
+
+@api.post('/songs/<int:sid>/resources/<kind>')
+@login_required
+def start_resource(sid,kind):
+    from .resource_jobs import queue,response
+    song=db.get_or_404(Song,sid)
+    if kind not in ('lyrics','reviews','artwork'):abort(404)
+    data=body();options={}
+    if kind=='lyrics':
+        if set(data)-{'refresh','candidate_id'}:abort(400)
+        if 'refresh' in data and type(data['refresh']) is not bool:abort(400)
+        if 'candidate_id' in data and (type(data['candidate_id']) is not int or data['candidate_id']<=0):abort(400)
+        options=dict(refresh=data.get('refresh',False))
+        if 'candidate_id' in data:options['candidate_id']=data['candidate_id']
+        # Already-saved passages never wait for a queue or an external service.
+        if not options['refresh'] and 'candidate_id' not in options:
+            from .lyric_service import latest
+            version=latest(song)
+            if version:return jsonify(status='completed',result=dict(status='available',version_id=version.id,from_database=True))
+    elif data:abort(400)
+    if kind=='reviews':
+        from .reviews import for_song
+        items=for_song(song)
+        if items:return jsonify(status='completed',result=dict(status='available',reviews=items,from_database=True))
+    if kind=='artwork':
+        from .artwork_service import cached
+        item=cached(song)
+        if item:return jsonify(status='completed',result=item)
+    manager=queue()
+    job=manager.store.submit(sid,kind,options,identity=song.album_id if kind=='artwork' else None)
+    manager.start();manager.wake.set()
+    result=response(job)
+    return jsonify(result),202 if result['status']=='pending' else 200
+
+
+@api.get('/resource-jobs/<job_id>')
+@login_required
+def resource_status(job_id):
+    from .resource_jobs import queue,response
+    if not re.fullmatch('[0-9a-f]{32}',job_id):abort(404)
+    manager=queue();job=manager.store.get(job_id)
+    if not job:abort(404)
+    manager.start()
+    return jsonify(response(job))
+
+
+@api.get('/media/artwork/<name>')
+def cached_artwork(name):
+    from flask import send_file
+    from .artwork_service import cached_file,image_type
+    path=cached_file(name)
+    if not path:abort(404)
+    with path.open('rb') as source:mime=image_type(source.read(16))
+    if not mime:abort(404)
+    return send_file(path,mimetype=mime,conditional=True,max_age=86400)
 
 @api.route('/comments',methods=['GET','POST'])
 @login_required
@@ -180,7 +276,14 @@ def comments():
         text=data.get('text'); visibility=data.get('visibility','private')
         if not isinstance(text,str) or not 1<=len(text.strip())<=2000 or visibility not in ('private','friends'): abort(400)
         c=Comment(user_id=session['user_id'],passage_id=p.id,text=text.strip(),visibility=visibility)
-        db.session.add(c); db.session.commit()
+        db.session.add(c)
+        version=db.session.get(LyricVersion,p.version_id)
+        row=db.session.get(UserSong,(session['user_id'],version.song_id))
+        if row is None:
+            row=UserSong(user_id=session['user_id'],song_id=version.song_id)
+            db.session.add(row)
+        if not row.recorded:row.recorded=True;row.recorded_at=now()
+        db.session.commit()
         return jsonify(comment_json(c)),201
     uid=session['user_id']; scope=request.args.get('scope','mine')
     stmt=db.select(Comment)
@@ -224,6 +327,7 @@ def record_song(sid):
         if key in data and type(data[key]) is not bool: abort(400)
     row=db.session.get(UserSong,(session['user_id'],sid))
     if not row: row=UserSong(user_id=session['user_id'],song_id=sid); db.session.add(row)
+    if data.get('recorded') and not row.recorded:row.recorded_at=now()
     for key,value in data.items(): setattr(row,key,value)
     db.session.commit(); return jsonify(ok=True)
 
@@ -239,7 +343,9 @@ from .music import import_song, fetch_lyrics, lyric_candidates
 
 @api.errorhandler(ProviderError)
 def provider_error(error):
-    return jsonify(error=str(error),code=error.code),error.status
+    response=jsonify(error=str(error),code=error.code,retry_after=error.retry_after)
+    if error.retry_after:response.headers['Retry-After']=str(error.retry_after)
+    return response,error.status
 
 @api.get('/catalog/search')
 @login_required
@@ -249,6 +355,27 @@ def catalog_search():
     except ValueError: abort(400)
     if not 1<=len(query)<=100 or not 1<=page<=100: abort(400)
     return jsonify(musicbrainz.search(query,page))
+
+
+@api.post('/catalog/search-jobs')
+@login_required
+def catalog_search_job():
+    from flask import g
+    from .resource_jobs import queue,response
+    data=body()
+    if set(data)-{'q','page'}:abort(400)
+    query=data.get('q');page=data.get('page',1)
+    if not isinstance(query,str) or not 1<=len(query.strip())<=100 or type(page) is not int or not 1<=page<=100:abort(400)
+    options=dict(query=query.strip(),page=page)
+    saved=musicbrainz.cached_search(**options)
+    if saved is not None:
+        info=getattr(g,'provider_status',{})
+        if info.get('mode')=='stale':
+            manager=queue();manager.store.submit(0,'catalog',options);manager.start();manager.wake.set()
+        return jsonify(status='completed',result={**saved,'_provider_status':info})
+    manager=queue();job=manager.store.submit(0,'catalog',options);manager.start();manager.wake.set()
+    result=response(job)
+    return jsonify(result),202 if result['status']=='pending' else 200
 
 @api.post('/catalog/import')
 @login_required
@@ -264,13 +391,10 @@ def catalog_import():
 def song_lyrics(sid):
     song=db.get_or_404(Song,sid)
     data=body()
+    if 'refresh' in data and type(data['refresh']) is not bool:abort(400)
     candidate=data.get('candidate_id')
     if candidate is not None and (type(candidate) is not int or candidate<=0): abort(400)
-    version=fetch_lyrics(song,candidate_id=candidate)
-    if version:
-        return jsonify(status='available',version_id=version.id)
-    candidates=lyric_candidates(song)
-    return jsonify(status='candidates' if candidates else 'missing',candidates=[dict(id=int(c['external_id']),title=c['title'],artist=c['artist'],album=c['album'],duration=c['duration'],preview='\n'.join(c['text'].splitlines()[:2])) for c in candidates])
+    return jsonify(lookup_lyrics(song,refresh=data.get('refresh',False),candidate_id=candidate))
 
 @api.get('/songs/<int:sid>/comments')
 @login_required
@@ -284,3 +408,19 @@ def song_comments(sid):
           .order_by(Comment.id.desc()))
     result=page_query(stmt)
     return jsonify(items=[comment_json(c) for c in result.items],pages=result.pages)
+
+
+@api.get('/friends/<int:uid>/profile')
+@login_required
+def friend_profile(uid):
+    from .models import TeamProfile
+    if uid != session['user_id'] and not friends_with(uid):
+        abort(404)
+    person = db.get_or_404(User, uid)
+    showcase = db.session.get(TeamProfile, uid)
+    track = db.session.get(Song, showcase.song_id) if showcase else None
+    stmt = db.select(Comment).where(Comment.user_id == uid, Comment.visibility == 'friends')
+    result = page_query(stmt.order_by(Comment.id.desc()))
+    count = db.session.scalar(db.select(db.func.count()).select_from(Comment).where(Comment.user_id == uid, Comment.visibility == 'friends'))
+    return jsonify(user=public(person), featured_song=dict(id=track.id, title=track.title, artist=track.artist) if track else None,
+                   items=[comment_json(c) for c in result.items], pages=result.pages, public_count=count)

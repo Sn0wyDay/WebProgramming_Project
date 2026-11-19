@@ -15,7 +15,12 @@ def test_two_accounts(tmp_path):
  for c,name in [(a,'alice'),(b,'bobby')]:
   assert send(c,'/register',data=dict(email=name+'@example.com',username=name,name=name,password='secure-password-123')).status_code==201
   assert send(c,'/login',data=dict(identifier=name,password='secure-password-123')).status_code==200
+ assert a.get('/api/home').json['total']==0
  cid=send(a,'/comments',data=dict(passage_id=1,text='private',visibility='private')).json['id']
+ assert a.get('/api/home').json['total']==1
+ assert a.get('/api/home').json['comment_count']==1
+ assert a.get('/api/home').json['items'][0]['comment_count']==1
+ assert b.get('/api/home').json['total']==0
  assert b.get('/api/comments/'+str(cid)).status_code==404
  assert b.get('/api/songs/1/comments').json['items']==[]
  assert send(b,'/comments/'+str(cid),'DELETE').status_code==403
