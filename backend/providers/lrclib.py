@@ -119,8 +119,17 @@ def search_rows(params):
     return rows
 
 
+def request_artist(artist,aliases):
+    # Prefer an explicitly verified Latin name where the catalog uses Korean.
+    # This changes the query, never the identity checks on the returned record.
+    if re.search('[가-힣]',artist):
+        return next((name for name in aliases if re.search('[a-z]',name,re.I) and not re.search('[가-힣,]',name)),artist)
+    return artist
+
+
 def find(title, artist, duration_ms=None, aliases=(), title_aliases=(), album=None,preferred_id=None):
     queries=list(dict.fromkeys([title]+list(title_aliases)))[:3]
+    provider_artist=request_artist(artist,aliases)
     def direct(row):
         if row is None:return None
         if not isinstance(row,dict):raise ProviderError('가사 직접 조회 응답 형식이 올바르지 않습니다.')
@@ -141,7 +150,7 @@ def find(title, artist, duration_ms=None, aliases=(), title_aliases=(), album=No
     # A signature lookup does not depend on the provider's search index.
     # Explicit aliases are tried before any broader search, never guessed.
     for query in queries:
-        params={'track_name':query,'artist_name':artist}
+        params={'track_name':query,'artist_name':provider_artist}
         if album:params['album_name']=album
         if duration_ms and 1000<=duration_ms<=3600000:params['duration']=duration_ms/1000
         result=direct(client.get('/api/get',params))
@@ -161,7 +170,7 @@ def find(title, artist, duration_ms=None, aliases=(), title_aliases=(), album=No
             return (not album_match,delta,normalized(row['title'])!=normalized(query),int(row['external_id']))
         return min(matches,key=rank) if matches else None
     for query in queries:
-        result=choose(search_rows({'track_name':query,'artist_name':artist}),query)
+        result=choose(search_rows({'track_name':query,'artist_name':provider_artist}),query)
         if result:return result
         # The provider's artist filter cannot expand aliases; title-only search
         # retrieves those rows, then the same strict local identity checks apply.
@@ -175,7 +184,7 @@ def candidates(title,artist,album,duration_ms,aliases=()):
     if not album or not duration_ms:
         return []
     matches={}
-    for row in search_rows({'q':artist+' '+re.sub(r'\s+-\s+EP$','',album,flags=re.I)}):
+    for row in search_rows({'q':request_artist(artist,aliases)+' '+re.sub(r'\s+-\s+EP$','',album,flags=re.I)}):
         parsed=parse_row(row,artist,duration_ms,aliases,album,strict=True)
         if parsed and same_version(title,parsed['title']):
             key=normalized(parsed['title'])

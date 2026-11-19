@@ -43,15 +43,27 @@ def artist_aliases(song):
     # Metadata/review lookups may already have resolved this precise recording.
     # Reading those verified names must never add a MusicBrainz HTTP dependency.
     precise=musicbrainz.client.recall('recording-artist-names:'+song.external_id)
-    return precise if precise else musicbrainz.cached_artist_aliases(song.artist)
+    names=precise if precise else musicbrainz.cached_artist_aliases(song.artist)
+    album=db.session.get(Album,song.album_id) if song.album_id else None
+    rule=verified_lyric_rule(song,album.title if album else None)
+    return list(dict.fromkeys(list(names)+rule.get('artist_aliases',[])))
+
+
+def verified_lyric_rule(song,album):
+    if song.provider!='musicbrainz':return {}
+    rules=json.loads((Path(__file__).parent/'data/title_aliases.json').read_text())
+    rule=rules.get(song.external_id)
+    if (rule and rule['title']==song.title and rule['artist']==song.artist
+            and musicbrainz.name_key(rule['album'])==musicbrainz.name_key(album or '')
+            and song.duration_ms and abs(rule['duration_ms']-song.duration_ms)<=2000):return rule
+    return {}
 
 
 def alternate_titles(song, album):
     if song.provider != 'musicbrainz':
         return []
-    rules=json.loads((Path(__file__).parent/'data/title_aliases.json').read_text())
-    rule=rules.get(song.external_id)
-    if rule and rule['title']==song.title and rule['artist']==song.artist and rule['album']==album and song.duration_ms and abs(rule['duration_ms']-song.duration_ms)<=2000:
+    rule=verified_lyric_rule(song,album)
+    if rule:
         return rule['alternate_titles'][:2]
     return musicbrainz.recording_titles(song.external_id,allow_network=False)
 

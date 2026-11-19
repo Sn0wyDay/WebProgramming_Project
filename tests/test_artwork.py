@@ -18,7 +18,9 @@ def metadata(release=RELEASE):
 
 @pytest.fixture(scope='module')
 def app(tmp_path_factory):
-    app=create_app({'TESTING':True,'SECRET_KEY':'test','SESSION_SQLALCHEMY_TABLE':'artwork_test_sessions','SQLALCHEMY_DATABASE_URI':'sqlite:///'+str(tmp_path_factory.mktemp('artwork')/'test.db')})
+    folder=tmp_path_factory.mktemp('artwork')
+    app=create_app({'TESTING':True,'SECRET_KEY':'test','SESSION_SQLALCHEMY_TABLE':'artwork_test_sessions',
+                    'SQLALCHEMY_DATABASE_URI':'sqlite:///'+str(folder/'test.db'),'ARTWORK_CACHE_PATH':str(folder/'covers')})
     with app.app_context():
         db.create_all()
         db.session.add(User(id=1,email='artwork@example.com',username='artwork',name='Art',password_hash='unused'))
