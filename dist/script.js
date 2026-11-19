@@ -25,9 +25,9 @@ async function render(){
  nav();if(!user)return auth();const [route,id]=location.hash.slice(1).split('/');
  REHome.leave();
  if(route==='song')await REHome.renderSong(Number(id));
- else if(route==='friends'){
-  const r=await api('/friends'),feed=await api('/comments?scope=friends');
-  main.innerHTML=`<h1>같은 음악, 다른 이야기.</h1><form id="users" class="search-box">${searchInput('이름 또는 아이디')}<button class="button dark">친구 검색</button></form><div id="results"></div><section class="panel"><h2>친구와 요청</h2>${r.items.map(x=>`<div class="person-row"><span>${esc(x.user.name)} @${esc(x.user.username)} · ${esc(x.status)}</span>${x.status==='incoming'?btn('수락','accept',x.user.id):''}${btn(x.status==='accepted'?'친구 해제':x.status==='incoming'?'거절':'요청 취소','remove',x.user.id)}${x.status==='accepted'?btn('기록 보기','friend-feed',x.user.id):''}</div>`).join('')||'아직 친구가 없습니다.'}</section><h2>공유 코멘트</h2>${feed.items.map(note).join('')||'공유된 코멘트 없음'}`;
+ else if(route==='shared')await Friends.shared(id);
+ else if(route==='friend')await Friends.profile(id);
+ else if(route==='friends'){await Friends.mount();
  }else if(route==='records')main.innerHTML=`<h1>나의 기록</h1>${btn('코멘트','notes')}${btn('기록한 음악','recorded')}${btn('저장한 곡','saved')}<input class="field" id="filter" placeholder="현재 목록 검색"><div id="results">${(await api('/comments')).items.map(note).join('')}</div>`;
  else if(route==='ai')main.innerHTML=`<h1>당신의 취향에 이어지는 음악.</h1><section class="recommend-top"><p>Gemini 설정 보류 · 실제 AI 연동 미검증</p>${btn('추천받기','recommend')}</section>`;
  else await REHome.renderHome();

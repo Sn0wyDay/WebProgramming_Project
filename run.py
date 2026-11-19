@@ -9,6 +9,10 @@ def prepare_app():
     app = create_app()
     with app.app_context():
         upgrade(directory=str(Path(__file__).resolve().parent / 'migrations'))
+        from backend.team import seed_team
+        from backend.supplied_lyrics import load_supplied_lyrics
+        seed_team()
+        load_supplied_lyrics()
     return app
 
 

@@ -105,3 +105,8 @@ class LyricLookup(db.Model):
     checked_at = db.Column(db.DateTime, nullable=False, default=now)
     retry_at = db.Column(db.DateTime)
     error_code = db.Column(db.String(40))
+
+
+class TeamProfile(db.Model):
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), primary_key=True)
+    song_id = db.Column(db.Integer, db.ForeignKey('song.id'), nullable=False)

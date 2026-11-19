@@ -41,6 +41,9 @@ def register():
     except IntegrityError:
         db.session.rollback()
         return jsonify(error='이미 사용 중인 이메일 또는 아이디입니다.'),409
+    from .team import connect_team
+    connect_team(user.id)
+    db.session.commit()
     return jsonify(user=public(user)),201
 
 @api.post('/login')
@@ -99,7 +102,8 @@ def visible(comment):
 def comment_json(c):
     p=db.session.get(Passage,c.passage_id)
     v=db.session.get(LyricVersion,p.version_id)
-    return dict(id=c.id,user=public(db.session.get(User,c.user_id)),song_id=v.song_id,passage_id=p.id,quote=p.text,text=c.text,visibility=c.visibility,created_at=c.created_at.isoformat()+'Z')
+    song = db.session.get(Song, v.song_id)
+    return dict(song_title=song.title, song_artist=song.artist,id=c.id,user=public(db.session.get(User,c.user_id)),song_id=v.song_id,passage_id=p.id,quote=p.text,text=c.text,visibility=c.visibility,created_at=c.created_at.isoformat()+'Z')
 
 def page_query(stmt):
     try: page=max(1,int(request.args.get('page',1)))
@@ -114,7 +118,12 @@ def users():
     stmt=db.select(User).where(User.id!=session['user_id'])
     if q: stmt=stmt.where(db.or_(User.name.contains(q,autoescape=True),User.username.contains(q,autoescape=True)))
     result=page_query(stmt.order_by(User.id))
-    return jsonify(items=[public(u) for u in result.items],pages=result.pages)
+    items = []
+    relations = db.session.scalars(db.select(Friendship).where(db.or_(Friendship.low_id==session['user_id'], Friendship.high_id==session['user_id']))).all()
+    states = {(r.high_id if r.low_id==session['user_id'] else r.low_id): ('accepted' if r.accepted else 'outgoing' if r.requester_id==session['user_id'] else 'incoming') for r in relations}
+    for u in result.items:
+        items.append(dict(**public(u), status=states.get(u.id, 'none')))
+    return jsonify(items=items,pages=result.pages)
 
 @api.route('/friends/<int:other>',methods=['POST','PATCH','DELETE'])
 @login_required
@@ -399,3 +408,19 @@ def song_comments(sid):
           .order_by(Comment.id.desc()))
     result=page_query(stmt)
     return jsonify(items=[comment_json(c) for c in result.items],pages=result.pages)
+
+
+@api.get('/friends/<int:uid>/profile')
+@login_required
+def friend_profile(uid):
+    from .models import TeamProfile
+    if uid != session['user_id'] and not friends_with(uid):
+        abort(404)
+    person = db.get_or_404(User, uid)
+    showcase = db.session.get(TeamProfile, uid)
+    track = db.session.get(Song, showcase.song_id) if showcase else None
+    stmt = db.select(Comment).where(Comment.user_id == uid, Comment.visibility == 'friends')
+    result = page_query(stmt.order_by(Comment.id.desc()))
+    count = db.session.scalar(db.select(db.func.count()).select_from(Comment).where(Comment.user_id == uid, Comment.visibility == 'friends'))
+    return jsonify(user=public(person), featured_song=dict(id=track.id, title=track.title, artist=track.artist) if track else None,
+                   items=[comment_json(c) for c in result.items], pages=result.pages, public_count=count)
