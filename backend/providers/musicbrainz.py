@@ -143,3 +143,39 @@ def recording_artist_aliases(external_id):
     names=list(dict.fromkeys(n for n in names if isinstance(n,str) and n.strip()))
     client.remember('recording-artist-names:'+external_id,names)
     return names
+
+
+REPORT_GENRES = {
+    '인디 팝': 'indie pop', '인디 록': 'indie rock', 'R&B': 'r&b', '팝': 'pop',
+    '힙합': 'hip hop', '재즈': 'jazz', '포크': 'folk', '일렉트로닉': 'electronic',
+}
+
+
+def report_candidates(song, genre):
+    # Keep query syntax server-owned. Only public catalog metadata reaches the provider.
+    words = re.findall(r'[^\W_]+', song.artist, re.UNICODE)
+    if not words:
+        return []
+    artist = 'artist:"' + ' '.join(words) + '"'
+    tag = f'tag:"{REPORT_GENRES[genre]}"' if genre else None
+    queries = [artist] if not tag else [artist + ' AND ' + tag, tag]
+    seen = {(name_key(song.artist), name_key(song.title))}
+    items = []
+    for query in queries:
+        data = client.get('/recording/', {'query': query + ' AND video:false', 'fmt': 'json', 'limit': 30})
+        if not isinstance(data, dict) or not isinstance(data.get('recordings'), list):
+            raise ProviderError('추천 곡 목록을 읽을 수 없습니다.')
+        for recording in data['recordings']:
+            item = normalize(recording)
+            key = (name_key(item['artist']), name_key(item['title']))
+            if key in seen or item['external_id'] == song.external_id:
+                continue
+            seen.add(key)
+            # Import can reuse the verified search row even during a provider outage.
+            client.remember(item['external_id'], item)
+            items.append(item)
+            if len(items) == 12:
+                return items
+        if len(items) >= 3:
+            break
+    return items

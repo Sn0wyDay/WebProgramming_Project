@@ -162,7 +162,7 @@ function nav(){
  userButton.setAttribute('aria-label',user?`내 계정: ${user.name}`:'로그인');
  userButton.classList.toggle('active',Boolean(user)&&onAccount);
  if(user&&onAccount)userButton.setAttribute('aria-current','page');else userButton.removeAttribute('aria-current');
- document.querySelector('#navigation').innerHTML=[['home','홈','explore'],['friends','친구','friends'],['ai','AI 추천','spark'],['records','나의 기록','note']].map(([a,b,i])=>`<a class="nav-link ${route===a?'active':''}" href="#${a}"${route===a?' aria-current="page"':''}>${icon(i)}<span>${b}</span></a>`).join('');
+ document.querySelector('#navigation').innerHTML=[['home','홈','explore'],['friends','친구','friends'],['ai','AI 리포트','spark'],['records','나의 기록','note']].map(([a,b,i])=>`<a class="nav-link ${route===a?'active':''}" href="#${a}"${route===a?' aria-current="page"':''}>${icon(i)}<span>${b}</span></a>`).join('');
 }
 let renderSeq=0;
 async function render(){
@@ -174,7 +174,7 @@ async function render(){
  else if(route==='friends'){await Friends.mount();
  }else if(route==='records')await recordsPage(id);
  else if(route==='account')await account();
- else if(route==='ai')main.innerHTML=`<h1>당신의 취향에 이어지는 음악.</h1><section class="recommend-top"><p>Gemini 설정 보류 · 실제 AI 연동 미검증</p>${btn('추천받기','recommend')}</section>`;
+ else if(route==='ai')await mountReport();
  else await REHome.renderHome();
 }
 document.addEventListener('click',async e=>{

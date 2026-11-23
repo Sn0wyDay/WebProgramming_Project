@@ -424,3 +424,14 @@ def friend_profile(uid):
     count = db.session.scalar(db.select(db.func.count()).select_from(Comment).where(Comment.user_id == uid, Comment.visibility == 'friends'))
     return jsonify(user=public(person), featured_song=dict(id=track.id, title=track.title, artist=track.artist) if track else None,
                    items=[comment_json(c) for c in result.items], pages=result.pages, public_count=count)
+
+
+@api.get('/report/discovery')
+@login_required
+def report_discovery():
+    seed = request.args.get('seed', type=int)
+    genre = request.args.get('genre', '')
+    if not seed or (genre and genre not in musicbrainz.REPORT_GENRES):
+        abort(400)
+    song = db.get_or_404(Song, seed)
+    return jsonify(items=musicbrainz.report_candidates(song, genre))
