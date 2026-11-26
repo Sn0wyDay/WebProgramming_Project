@@ -19,8 +19,8 @@ def create_app(config=None):
     def index():
         return app.send_static_file('index.html')
     database_url = os.environ.get('DATABASE_URL')
-    if database_url and database_url.startswith('postgres://'):
-        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    if database_url and database_url.startswith(('postgres://', 'postgresql://')):
+        database_url = 'postgresql+psycopg2://' + database_url.split('://', 1)[1]
     app.config.update(SECRET_KEY=os.environ.get('SECRET_KEY'),
         SQLALCHEMY_DATABASE_URI=database_url,
         SESSION_TYPE='sqlalchemy', SESSION_COOKIE_HTTPONLY=True,
