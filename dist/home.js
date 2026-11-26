@@ -145,7 +145,10 @@ window.REHome=(()=>{
   });
   if(wait>0){clearTimeout(lyricsRetryTimer);lyricsRetryTimer=setTimeout(syncLyricButtons,1000);}
  }
- function card(s){return `<article class="song-card" data-song-card="${s.id}"><div class="cover-wrap"><a class="cover-link" href="#song/${s.id}" aria-label="${esc(s.title)} 가사와 기록 보기">${coverImage(s,true)}<span class="cover-album"><small>${esc(s.artist.toUpperCase())}</small>${esc(s.album||s.title)}</span></a>${bookmark(s)}</div><div class="song-info"><div><a class="song-title" href="#song/${s.id}">${esc(s.title)}</a><p class="song-artist">${esc(s.artist)}</p>${lyricBadge(s)}</div>${icon('chevron')}</div><div class="star-row" aria-label="내 별점 ${s.rating||0}점">${stars(s.rating)}<small>${s.comment_count||0}개의 코멘트</small></div></article>`;}
+ function card(s){
+  const remove=viewAll?'':`<button type="button" class="text-button home-remove-song" data-home-action="remove-song" data-id="${s.id}" aria-label="${esc(s.title)} 홈에서 빼기">홈에서 빼기</button>`;
+  return `<article class="song-card" data-song-card="${s.id}"><div class="cover-wrap"><a class="cover-link" href="#song/${s.id}" aria-label="${esc(s.title)} 가사와 기록 보기">${coverImage(s,true)}<span class="cover-album"><small>${esc(s.artist.toUpperCase())}</small>${esc(s.album||s.title)}</span></a>${bookmark(s)}</div><div class="song-info"><div><a class="song-title" href="#song/${s.id}">${esc(s.title)}</a><p class="song-artist">${esc(s.artist)}</p>${lyricBadge(s)}</div>${icon('chevron')}</div><div class="star-row" aria-label="내 별점 ${s.rating||0}점">${stars(s.rating)}<small>${s.comment_count||0}개의 코멘트</small></div>${remove}</article>`;
+ }
  function pages(page,total,prefix){return total>1?`<div class="home-pages">${page>1?action('이전',prefix+'-prev'):''}<span>${page} / ${total}</span>${page<total?action('다음',prefix+'-next'):''}</div>`:'';}
  async function renderHome(){
   const version=++renderVersion;root().dataset.homeView='home';root().classList.add('home-service');
@@ -154,6 +157,8 @@ window.REHome=(()=>{
    const summary=await api('/home?page='+homePage);
    const result=viewAll?await api('/songs?page='+homePage):summary;
    if(version!==renderVersion)return;
+   const lastPage=Math.max(1,result.pages);
+   if(homePage>lastPage){homePage=lastPage;return renderHome();}
    root().innerHTML=`<div class="page-heading"><div><div class="eyebrow">YOUR THOUGHTS BETWEEN THE LYRICS</div><h1>음악을 다시 듣고,<br>새롭게 남기는 이야기.</h1><p>좋아하는 구절에 머물고, 당신의 해석을 남겨 보세요.</p></div><div class="count-banner"><div><strong>${summary.total}</strong>기록한 음악</div><span class="divider"></span><div><strong>${summary.comment_count}</strong>남긴 코멘트</div></div></div><section><div class="home-toolbar"><h2>${viewAll?'모든 음악':'최근에 추가한 음악'}</h2><div class="toolbar-actions">${action(viewAll?'최근 기록 보기':'전체 목록 보기','view-all','','text-button')}${action(icon('plus')+' 추가','add','','button dark')}</div></div><div class="song-grid home-grid">${result.items.map(card).join('')}<button class="add-card" data-home-action="add"><span class="add-circle">${icon('plus')}</span><strong>새로운 음악 기록</strong><small>기억하고 싶은 곡을 추가해 보세요</small></button></div>${pages(homePage,result.pages,'home')}${!result.items.length?'<p class="small-muted home-empty-hint">추가 버튼에서 곡을 찾아 첫 음악 기록을 시작해 보세요.</p>':''}</section><div class="home-bottom"><div><p>오늘의 마음에 어울리는 음악이 궁금한가요?</p><small>당신의 기록을 바탕으로 새로운 곡을 발견해 보세요.</small></div><a href="#ai" class="button">${icon('spark')} AI 추천받기</a></div>`;
    loadArtwork(root());
   }catch(error){if(version===renderVersion)root().innerHTML=errorHtml(error,action('다시 불러오기','home-retry'));}
@@ -306,7 +311,20 @@ window.REHome=(()=>{
    else if(name==='local-list'){modalQuery='';modalPage=1;modalScope='local';modalField='all';modalArtist='';const form=document.querySelector('[data-home-form="search"]');form.elements.scope.value='local';form.elements.field.value='all';form.elements.artist.value='';form.elements.q.value='';updateSearchFields(form);await search();}
    else if(name==='select-song'){
     const result=button.dataset.external==='true'?await api('/catalog/import','POST',{external_id:id}):{id:Number(id)};
-    await api('/records/'+result.id,'PUT',{recorded:true});dialog().close();pendingSongId=result.id;location.hash='song/'+result.id;
+    await api('/records/'+result.id,'PUT',{recorded:true,home_hidden:false});dialog().close();pendingSongId=result.id;location.hash='song/'+result.id;
+   }
+   else if(name==='remove-song'){
+    const title=button.closest('[data-song-card]').querySelector('.song-title').textContent;
+    modal('홈에서 곡을 뺄까요?',`<p><strong>${esc(title)}</strong> 곡을 홈 목록에서 뺍니다. 코멘트, 별점, 북마크는 유지됩니다.</p>`,action('취소','close')+action('홈에서 빼기','confirm-remove-song',id,'button dark'));
+   }
+   else if(name==='confirm-remove-song'){
+    await api('/records/'+id,'PUT',{home_hidden:true});
+    if(button.isConnected)dialog().close();
+    if(root().dataset.homeView==='home'){
+     await renderHome();
+     root().querySelector('[data-home-action="remove-song"], [data-home-action="add"]')?.focus();
+    }
+    toast('홈 목록에서 곡을 뺐어요.');
    }
    else if(name==='bookmark'){
     let summary=root().dataset.homeView==='song'&&current?.id===Number(id)?current:null;
@@ -322,7 +340,7 @@ window.REHome=(()=>{
     root().querySelector('.rating-label').textContent='나의 별점 '+current.rating+'.0';
    }
    else if(name==='record'){
-    await api('/records/'+current.id,'PUT',{recorded:true});const first=root().querySelector('[data-home-action="line"]');if(first&&first.getAttribute('aria-expanded')!=='true')first.click();else if(first)document.getElementById('home-editor-'+first.dataset.id)?.querySelector('textarea')?.focus();else toast('음악 기록에 추가했어요.');
+    await api('/records/'+current.id,'PUT',{recorded:true,home_hidden:false});const first=root().querySelector('[data-home-action="line"]');if(first&&first.getAttribute('aria-expanded')!=='true')first.click();else if(first)document.getElementById('home-editor-'+first.dataset.id)?.querySelector('textarea')?.focus();else toast('음악 기록에 추가했어요.');
    }
    else if(name==='line'){
     const target=document.getElementById('home-editor-'+id);if(!target)return;

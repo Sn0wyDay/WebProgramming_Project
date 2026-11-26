@@ -64,6 +64,7 @@ class UserSong(db.Model):
     rating = db.Column(db.Integer)
     saved = db.Column(db.Boolean, default=False, nullable=False)
     recorded = db.Column(db.Boolean, default=False, nullable=False)
+    home_hidden = db.Column(db.Boolean, default=False, server_default=db.false(), nullable=False)
     __table_args__ = (db.CheckConstraint('rating IS NULL OR (rating >= 1 AND rating <= 5)'),)
 
 class Friendship(db.Model):

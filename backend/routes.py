@@ -176,7 +176,15 @@ def song_summary(s):
 def home_data():
     uid=session['user_id']
     commented=db.select(LyricVersion.song_id).join(Passage,Passage.version_id==LyricVersion.id).join(Comment,Comment.passage_id==Passage.id).where(Comment.user_id==uid)
-    stmt=db.select(Song).outerjoin(UserSong,db.and_(UserSong.song_id==Song.id,UserSong.user_id==uid)).where(db.or_(UserSong.recorded.is_(True),Song.id.in_(commented))).order_by(UserSong.recorded_at.desc(),Song.id.desc())
+    stmt = (
+        db.select(Song)
+        .outerjoin(UserSong, db.and_(UserSong.song_id == Song.id, UserSong.user_id == uid))
+        .where(
+            UserSong.home_hidden.is_not(True),
+            db.or_(UserSong.recorded.is_(True), Song.id.in_(commented)),
+        )
+        .order_by(UserSong.recorded_at.desc(), Song.id.desc())
+    )
     result=page_query(stmt)
     note_count=db.session.scalar(db.select(db.func.count(Comment.id)).where(Comment.user_id==uid))
     return jsonify(items=[song_summary(s) for s in result.items],pages=result.pages,total=result.total,comment_count=note_count)
@@ -360,13 +368,14 @@ def records():
 @login_required
 def record_song(sid):
     db.get_or_404(Song,sid); data=body()
-    if set(data)-{'rating','saved','recorded'}: abort(400)
+    if set(data)-{'rating','saved','recorded','home_hidden'}: abort(400)
     if 'rating' in data and (type(data['rating']) is not int or not 1<=data['rating']<=5): abort(400)
-    for key in ('saved','recorded'):
+    for key in ('saved','recorded','home_hidden'):
         if key in data and type(data[key]) is not bool: abort(400)
     row=db.session.get(UserSong,(session['user_id'],sid))
     if not row: row=UserSong(user_id=session['user_id'],song_id=sid); db.session.add(row)
-    if data.get('recorded') and not row.recorded:row.recorded_at=now()
+    if data.get('recorded') and (not row.recorded or (row.home_hidden and data.get('home_hidden') is False)):
+        row.recorded_at = now()
     for key,value in data.items(): setattr(row,key,value)
     db.session.commit(); return jsonify(ok=True)
 

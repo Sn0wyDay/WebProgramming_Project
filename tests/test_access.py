@@ -1,5 +1,5 @@
 from backend import create_app, db
-from backend.models import Song, LyricVersion, Passage
+from backend.models import Comment, Song, LyricVersion, Passage
 
 def test_two_accounts(tmp_path):
  app=create_app({'TESTING':True,'SECRET_KEY':'test','SQLALCHEMY_DATABASE_URI':'sqlite:///'+str(tmp_path/'test.db')})
@@ -44,6 +44,47 @@ def test_two_accounts(tmp_path):
  assert a.get('/api/records').status_code==401
  assert send(a,'/login',data=dict(identifier='alice',password='secure-password-123')).status_code==200
  assert a.get('/api/records').json['items'][0]['saved'] is True
+
+def test_remove_song_from_home_preserves_records_and_is_per_user(tmp_path):
+ app=create_app({'TESTING':True,'SECRET_KEY':'test','SESSION_SQLALCHEMY_TABLE':'home_test_sessions','SQLALCHEMY_DATABASE_URI':'sqlite:///'+str(tmp_path/'home.db')})
+ with app.app_context():
+  db.create_all()
+  db.session.add(Song(id=1,provider='test',external_id='1',title='Test',artist='Artist'))
+  db.session.add(LyricVersion(id=1,song_id=1,provider='test',digest='a'*64,source_url='https://example.com'))
+  db.session.add(Passage(id=1,version_id=1,position=0,text='Test lyric'))
+  db.session.commit()
+
+ def headers(client):
+  return {'X-CSRFToken':client.get('/api/session').json['csrf_token']}
+
+ a,b=app.test_client(),app.test_client()
+ for client,name in ((a,'alice'),(b,'bobby')):
+  account=dict(email=name+'@example.com',username=name,name=name,password='secure-password-123')
+  assert client.post('/api/register',json=account,headers=headers(client)).status_code==201
+  assert client.post('/api/login',json=dict(identifier=name,password=account['password']),headers=headers(client)).status_code==200
+
+ with app.app_context():
+  # Earlier data can have a comment without a corresponding UserSong row.
+  db.session.add(Comment(user_id=1,passage_id=1,text='Older comment',visibility='friends'))
+  db.session.commit()
+
+ def update(client,**data):
+  return client.put('/api/records/1',json=data,headers=headers(client))
+
+ assert a.get('/api/home').json['total']==1
+ assert update(a,home_hidden='true').status_code==400
+ assert update(a,home_hidden=True).status_code==200
+ assert update(b,recorded=True).status_code==200
+ assert update(a,rating=5,saved=True,recorded=True).status_code==200
+ assert a.post('/api/comments',json=dict(passage_id=1,text='New comment'),headers=headers(a)).status_code==201
+ assert update(a,home_hidden=True).status_code==200
+ assert a.get('/api/home').json==dict(items=[],pages=0,total=0,comment_count=2)
+ assert b.get('/api/home').json['total']==1
+ assert a.get('/api/songs').json['items'][0]['id']==1
+ assert a.get('/api/records').json['items']==[dict(song_id=1,rating=5,saved=True,recorded=True)]
+ assert [c['text'] for c in a.get('/api/comments').json['items']]==['New comment','Older comment']
+ assert update(a,recorded=True,home_hidden=False).status_code==200
+ assert a.get('/api/home').json['items'][0]['comment_count']==2
 
 def test_password_minimum_eight(tmp_path):
  app=create_app({'TESTING':True,'SECRET_KEY':'test','SESSION_SQLALCHEMY_TABLE':'password_test_sessions','SQLALCHEMY_DATABASE_URI':'sqlite:///'+str(tmp_path/'password.db')})

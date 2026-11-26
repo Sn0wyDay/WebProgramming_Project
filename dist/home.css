@@ -29,6 +29,8 @@
 /* Saved state is visible in the icon on both cards and the detail button. */
 .home-service [data-home-action="bookmark"].saved{color:#42623b;background:#dfebd7;border-color:#c6d7bc}
 .home-service [data-home-action="bookmark"].saved .icon{fill:currentColor;stroke:currentColor}
+.home-service .home-remove-song{min-height:44px;color:#56674a}
+.home-service .home-remove-song:hover{text-decoration:underline}
 .home-service img.artwork-real,#home-add-results img.artwork-real{filter:none}
 .home-service .cover-wrap:has(img.artwork-real) .cover-album{display:none}
 .home-service .review-excerpt{margin:16px 0 8px;padding:0;border:0;font-size:14px;line-height:1.9;color:#52604b;overflow-wrap:anywhere}
