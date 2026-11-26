@@ -72,6 +72,7 @@ def test_remove_song_from_home_preserves_records_and_is_per_user(tmp_path):
   return client.put('/api/records/1',json=data,headers=headers(client))
 
  assert a.get('/api/home').json['total']==1
+ assert a.get('/api/songs/1').json['home_hidden'] is False
  assert update(a,home_hidden='true').status_code==400
  assert update(a,home_hidden=True).status_code==200
  assert update(b,recorded=True).status_code==200
@@ -80,10 +81,13 @@ def test_remove_song_from_home_preserves_records_and_is_per_user(tmp_path):
  assert update(a,home_hidden=True).status_code==200
  assert a.get('/api/home').json==dict(items=[],pages=0,total=0,comment_count=2)
  assert b.get('/api/home').json['total']==1
+ assert a.get('/api/songs/1').json['home_hidden'] is True
+ assert b.get('/api/songs/1').json['home_hidden'] is False
  assert a.get('/api/songs').json['items'][0]['id']==1
  assert a.get('/api/records').json['items']==[dict(song_id=1,rating=5,saved=True,recorded=True)]
  assert [c['text'] for c in a.get('/api/comments').json['items']]==['New comment','Older comment']
  assert update(a,recorded=True,home_hidden=False).status_code==200
+ assert a.get('/api/songs/1').json['home_hidden'] is False
  assert a.get('/api/home').json['items'][0]['comment_count']==2
 
 def test_password_minimum_eight(tmp_path):

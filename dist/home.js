@@ -145,8 +145,14 @@ window.REHome=(()=>{
   });
   if(wait>0){clearTimeout(lyricsRetryTimer);lyricsRetryTimer=setTimeout(syncLyricButtons,1000);}
  }
+ function removeSongButton(s){
+  return `<button type="button" class="text-button home-remove-song" data-home-action="remove-song" data-id="${s.id}" data-title="${esc(s.title)}" aria-label="${esc(s.title)} 홈에서 빼기">홈에서 빼기</button>`;
+ }
+ function syncSongRemoval(){
+  document.getElementById('home-detail-remove').hidden=current.home_hidden||!(current.recorded||current.comment_count);
+ }
  function card(s){
-  const remove=viewAll?'':`<button type="button" class="text-button home-remove-song" data-home-action="remove-song" data-id="${s.id}" aria-label="${esc(s.title)} 홈에서 빼기">홈에서 빼기</button>`;
+  const remove=viewAll?'':removeSongButton(s);
   return `<article class="song-card" data-song-card="${s.id}"><div class="cover-wrap"><a class="cover-link" href="#song/${s.id}" aria-label="${esc(s.title)} 가사와 기록 보기">${coverImage(s,true)}<span class="cover-album"><small>${esc(s.artist.toUpperCase())}</small>${esc(s.album||s.title)}</span></a>${bookmark(s)}</div><div class="song-info"><div><a class="song-title" href="#song/${s.id}">${esc(s.title)}</a><p class="song-artist">${esc(s.artist)}</p>${lyricBadge(s)}</div>${icon('chevron')}</div><div class="star-row" aria-label="내 별점 ${s.rating||0}점">${stars(s.rating)}<small>${s.comment_count||0}개의 코멘트</small></div>${remove}</article>`;
  }
  function pages(page,total,prefix){return total>1?`<div class="home-pages">${page>1?action('이전',prefix+'-prev'):''}<span>${page} / ${total}</span>${page<total?action('다음',prefix+'-next'):''}</div>`:'';}
@@ -266,7 +272,8 @@ window.REHome=(()=>{
   root().innerHTML='<div class="loading" role="status">음악을 불러오는 중…</div>';
   try{
    const data=await api('/songs/'+id);if(version!==renderVersion)return;current=data;comments=[];commentPage=0;commentPages=0;
-   root().innerHTML=`<a class="back-button" href="#home">${icon('back')} 돌아가기</a><div class="song-hero">${coverImage(current)}<div><div class="eyebrow">${esc(current.album||'MUSIC RECORD')}</div><h1>${esc(current.title)}</h1><p class="song-meta">${esc(current.artist)}${current.album?' · '+esc(current.album):''}</p><div class="rating-control" aria-label="내 별점 선택">${Array.from({length:5},(_,i)=>`<button class="${i<(current.rating||0)?'filled':''}" data-home-action="rate" data-id="${i+1}" aria-label="별점 ${i+1}점" aria-pressed="${current.rating===i+1}">${icon('star')}</button>`).join('')}<span class="rating-label">${current.rating?'나의 별점 '+current.rating+'.0':'별점을 남겨 주세요'}</span></div></div><div id="home-detail-bookmark">${bookmark(current,true)}</div></div><div class="detail-layout reverse-detail"><section class="panel lyrics-panel"><div class="panel-header"><h2>가사와 나의 코멘트</h2><span>구절별 음악 기록</span></div><div class="lyric-hint">${icon('note')} 가사를 눌러 감상을 작성하고, 다시 누르면 작성 창을 닫을 수 있어요.</div><div id="home-lyrics">${current.passages.length?lyricRows():lyricEmpty()}</div><div id="home-provider-notice" role="status"></div><div class="home-lyric-buttons">${action(current.passages.length?'가사 새로 확인':'가사 불러오기','lyrics',current.id,'button outline')}${action(icon('plus')+' 기록 추가','record',current.id,'button dark record-button')}</div><div id="home-comment-more"></div><div id="home-archived-comments"></div></section><aside class="panel critics-panel"><div class="panel-header"><h2>음악 평론 · 선정글</h2><span>CRITICS’ NOTES</span></div><div id="home-reviews">${current.reviews.length?reviewCards(current.reviews):'<p class="loading" role="status">평론·선정글을 찾는 중…</p>'}</div><div id="home-review-notice" role="status"></div><p class="critic-disclaimer">발췌와 선정 정보를 간략히 표시합니다. 자세한 내용은 원문에서 읽어보세요.</p></aside></div>`;
+   root().innerHTML=`<a class="back-button" href="#home">${icon('back')} 돌아가기</a><div class="song-hero">${coverImage(current)}<div><div class="eyebrow">${esc(current.album||'MUSIC RECORD')}</div><h1>${esc(current.title)}</h1><p class="song-meta">${esc(current.artist)}${current.album?' · '+esc(current.album):''}</p><div class="rating-control" aria-label="내 별점 선택">${Array.from({length:5},(_,i)=>`<button class="${i<(current.rating||0)?'filled':''}" data-home-action="rate" data-id="${i+1}" aria-label="별점 ${i+1}점" aria-pressed="${current.rating===i+1}">${icon('star')}</button>`).join('')}<span class="rating-label">${current.rating?'나의 별점 '+current.rating+'.0':'별점을 남겨 주세요'}</span></div></div><div class="song-hero-actions"><div id="home-detail-bookmark">${bookmark(current,true)}</div><div id="home-detail-remove" hidden>${removeSongButton(current)}</div></div></div><div class="detail-layout reverse-detail"><section class="panel lyrics-panel"><div class="panel-header"><h2>가사와 나의 코멘트</h2><span>구절별 음악 기록</span></div><div class="lyric-hint">${icon('note')} 가사를 눌러 감상을 작성하고, 다시 누르면 작성 창을 닫을 수 있어요.</div><div id="home-lyrics">${current.passages.length?lyricRows():lyricEmpty()}</div><div id="home-provider-notice" role="status"></div><div class="home-lyric-buttons">${action(current.passages.length?'가사 새로 확인':'가사 불러오기','lyrics',current.id,'button outline')}${action(icon('plus')+' 기록 추가','record',current.id,'button dark record-button')}</div><div id="home-comment-more"></div><div id="home-archived-comments"></div></section><aside class="panel critics-panel"><div class="panel-header"><h2>음악 평론 · 선정글</h2><span>CRITICS’ NOTES</span></div><div id="home-reviews">${current.reviews.length?reviewCards(current.reviews):'<p class="loading" role="status">평론·선정글을 찾는 중…</p>'}</div><div id="home-review-notice" role="status"></div><p class="critic-disclaimer">발췌와 선정 정보를 간략히 표시합니다. 자세한 내용은 원문에서 읽어보세요.</p></aside></div>`;
+   syncSongRemoval();
    root().querySelector('#home-lyrics').insertAdjacentHTML('beforebegin','<p id="home-comment-notice" class="home-notice" role="status"></p>');
    lyricsRetryAt=Date.now()+(current.lyrics_retry_after||0)*1000;syncLyricButtons();
    if(!current.passages.length&&current.lyrics_status!=='instrumental'&&!current.lyrics_auto_retry_after)loadLyrics(false);
@@ -287,7 +294,9 @@ window.REHome=(()=>{
    if(result.message)html+=`<p>${esc(result.message)}</p>`;
    lyricsRetryAt=Date.now()+(result.retry_after||0)*1000;
    if(result.status==='candidates')html+=`<p>제목이 다른 가사 후보입니다. 같은 곡인지 확인해 주세요.</p>${candidates.map(c=>`<article class="lyric-candidate"><h3>${esc(c.title)}</h3><p>${esc(c.artist)} · ${esc(c.album)} · ${c.duration}초</p><blockquote>${esc(c.preview)}</blockquote>${action('후보 확인','candidate',c.id)}</article>`).join('')}`;
-   const updated=await api('/songs/'+sid);if(!target.isConnected)return;current=updated;
+   const updated=await api('/songs/'+sid);if(!target.isConnected)return;
+   const {home_hidden,recorded,comment_count}=current;
+   current={...updated,home_hidden,recorded,comment_count};
    document.getElementById('home-lyrics').innerHTML=current.passages.length?lyricRows():lyricEmpty();
    target.innerHTML=html;paintComments();
   }catch(error){if(target.isConnected){
@@ -314,8 +323,7 @@ window.REHome=(()=>{
     await api('/records/'+result.id,'PUT',{recorded:true,home_hidden:false});dialog().close();pendingSongId=result.id;location.hash='song/'+result.id;
    }
    else if(name==='remove-song'){
-    const title=button.closest('[data-song-card]').querySelector('.song-title').textContent;
-    modal('홈에서 곡을 뺄까요?',`<p><strong>${esc(title)}</strong> 곡을 홈 목록에서 뺍니다. 코멘트, 별점, 북마크는 유지됩니다.</p>`,action('취소','close')+action('홈에서 빼기','confirm-remove-song',id,'button dark'));
+    modal('홈에서 곡을 뺄까요?',`<p><strong>${esc(button.dataset.title)}</strong> 곡을 홈 목록에서 뺍니다. 코멘트, 별점, 북마크는 유지됩니다.</p>`,action('취소','close')+action('홈에서 빼기','confirm-remove-song',id,'button dark'));
    }
    else if(name==='confirm-remove-song'){
     await api('/records/'+id,'PUT',{home_hidden:true});
@@ -323,6 +331,10 @@ window.REHome=(()=>{
     if(root().dataset.homeView==='home'){
      await renderHome();
      root().querySelector('[data-home-action="remove-song"], [data-home-action="add"]')?.focus();
+    }else if(root().dataset.homeView==='song'&&current?.id===Number(id)&&document.getElementById('home-detail-remove')){
+     current.home_hidden=true;
+     syncSongRemoval();
+     document.querySelector('#home-detail-bookmark button').focus({preventScroll:true});
     }
     toast('홈 목록에서 곡을 뺐어요.');
    }
@@ -335,12 +347,15 @@ window.REHome=(()=>{
    }
    else if(name==='song-retry')await renderSong(Number(id),linkedCommentId);
    else if(name==='rate'){
-    const sid=current.id;await api('/records/'+sid,'PUT',{rating:Number(id),recorded:true});if(current.id!==sid||root().dataset.homeView!=='song')return;current.rating=Number(id);
+    const sid=current.id;await api('/records/'+sid,'PUT',{rating:Number(id),recorded:true});if(!button.isConnected)return;
+    current.rating=Number(id);current.recorded=true;syncSongRemoval();
     root().querySelectorAll('[data-home-action="rate"]').forEach((b,i)=>{b.classList.toggle('filled',i<current.rating);b.setAttribute('aria-pressed',String(i+1===current.rating));});
     root().querySelector('.rating-label').textContent='나의 별점 '+current.rating+'.0';
    }
    else if(name==='record'){
-    await api('/records/'+current.id,'PUT',{recorded:true,home_hidden:false});const first=root().querySelector('[data-home-action="line"]');if(first&&first.getAttribute('aria-expanded')!=='true')first.click();else if(first)document.getElementById('home-editor-'+first.dataset.id)?.querySelector('textarea')?.focus();else toast('음악 기록에 추가했어요.');
+    await api('/records/'+id,'PUT',{recorded:true,home_hidden:false});if(!button.isConnected)return;
+    current.recorded=true;current.home_hidden=false;syncSongRemoval();
+    const first=root().querySelector('[data-home-action="line"]');if(first&&first.getAttribute('aria-expanded')!=='true')first.click();else if(first)document.getElementById('home-editor-'+first.dataset.id)?.querySelector('textarea')?.focus();else toast('음악 기록에 추가했어요.');
    }
    else if(name==='line'){
     const target=document.getElementById('home-editor-'+id);if(!target)return;
@@ -360,7 +375,16 @@ window.REHome=(()=>{
     modal('코멘트 수정',`<blockquote class="selected-quote">${esc(c.quote)}</blockquote><form data-home-form="edit" data-id="${c.id}"><label class="form-label" for="home-edit-text">나의 코멘트</label><textarea class="textarea" id="home-edit-text" name="text" maxlength="2000" required>${esc(c.text)}</textarea><div class="form-bottom"><select class="select" name="visibility" aria-label="공개 범위"><option value="private" ${c.visibility==='private'?'selected':''}>나만 보기</option><option value="friends" ${c.visibility==='friends'?'selected':''}>친구에게 공개</option></select><button class="button dark">저장하기</button></div></form>`);
    }
    else if(name==='delete-comment')modal('코멘트를 삭제할까요?','<p>선택한 코멘트가 삭제됩니다.</p>',action('취소','close')+action('삭제','confirm-delete',id,'button danger'));
-   else if(name==='confirm-delete'){await api('/comments/'+id,'DELETE');commentRevision++;comments=comments.filter(c=>c.id!==Number(id));dialog().close();paintComments();toast('코멘트를 삭제했어요.');}
+   else if(name==='confirm-delete'){
+    const detail=document.getElementById('home-detail-remove');
+    await api('/comments/'+id,'DELETE');
+    if(button.isConnected)dialog().close();
+    if(detail?.isConnected){
+     commentRevision++;comments=comments.filter(c=>c.id!==Number(id));
+     current.comment_count=Math.max(0,current.comment_count-1);syncSongRemoval();paintComments();
+    }
+    toast('코멘트를 삭제했어요.');
+   }
   }catch(error){toast(error.message);}
   finally{if(name==='lyrics')syncLyricButtons();else if(name!=='reviews')button.disabled=false;}
  });
@@ -372,6 +396,7 @@ window.REHome=(()=>{
    else if(form.dataset.homeForm==='comment'){
     const c=await api('/comments','POST',{...data,passage_id:Number(form.dataset.id)});
     if(!form.isConnected)return;commentRevision++;comments=[c,...comments.filter(n=>n.id!==c.id)];form.remove();
+    current.recorded=true;current.comment_count++;syncSongRemoval();
     const line=root().querySelector(`[data-home-action="line"][data-id="${c.passage_id}"]`);line.classList.remove('selected');line.setAttribute('aria-expanded','false');paintComments();toast('코멘트를 저장했어요.');
    }
    else if(form.dataset.homeForm==='edit'){

@@ -168,7 +168,8 @@ def song_summary(s):
     return dict(id=s.id,title=s.title,artist=s.artist,album=album.title if album else None,
                 album_id=album.id if album else None,image=image_for(album),
                 artwork_source=artwork_source(album.image) if album else None,rating=own.rating if own else None,
-                saved=bool(own and own.saved),recorded=bool(own and own.recorded),comment_count=count,**availability(s))
+                saved=bool(own and own.saved),recorded=bool(own and own.recorded),
+                home_hidden=bool(own and own.home_hidden),comment_count=count,**availability(s))
 
 
 @api.get('/home')

@@ -2,7 +2,7 @@
 .home-service .home-empty-hint{margin-top:20px}
 .home-service .cover-album{overflow-wrap:anywhere}
 .home-service .home-pages,.modal-body .home-pages{display:flex;justify-content:center;align-items:center;gap:12px;margin:22px 0}
-.home-service .song-hero>#home-detail-bookmark{margin-left:auto;align-self:center}
+.home-service .song-hero-actions{margin-left:auto;align-self:center;display:flex;flex-wrap:wrap;align-items:center;gap:0 14px}
 .home-service .inline-note time{font-size:10px;color:var(--muted)}
 .home-service .inline-note .note-person{flex-wrap:wrap}
 .home-service .inline-note[tabindex="-1"]{background:#edf3e7;outline:2px solid #829c72;outline-offset:2px}
@@ -23,7 +23,7 @@
 #home-add-results .add-result>span{min-width:0;overflow-wrap:anywhere}
 #home-add-results .add-result img{width:48px;height:48px;flex:0 0 48px}
 .home-service .inline-notes:empty{display:none}
-@media(max-width:600px){.home-service .song-hero>#home-detail-bookmark{margin-left:0}.home-service .home-toolbar{gap:10px;flex-wrap:wrap}.home-service .home-lyric-buttons .button{font-size:11px}}
+@media(max-width:600px){.home-service .song-hero-actions{margin-left:0}.home-service .home-toolbar{gap:10px;flex-wrap:wrap}.home-service .home-lyric-buttons .button{font-size:11px}}
 .home-lyrics-state{display:block;color:#8b967f;font-size:10px;line-height:1.7;margin-top:3px}
 .home-service .song-info .home-lyrics-state{font-size:11px}
 /* Saved state is visible in the icon on both cards and the detail button. */
