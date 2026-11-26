@@ -75,7 +75,7 @@ def test_resource_jobs_require_login_csrf_and_validated_options(app):
     for data in ({'refresh':'true'},{'candidate_id':True},{'candidate_id':-1},{'url':'https://other.test'},{'user_id':2}):
         assert submit(c,data=data).status_code==400
     assert submit(c,kind='unsupported').status_code==404
-    assert submit(c,kind='reviews',data={'refresh':True}).status_code==400
+    assert submit(c,kind='reviews',data={'refresh':'yes'}).status_code==400
     assert c.get('/api/resource-jobs/invalid').status_code==404
 
 
@@ -157,3 +157,22 @@ def test_second_lost_worker_reports_interruption_instead_of_loading_forever(tmp_
     assert store.claim() is None
     failed=response(store.get(first['id']))
     assert failed['status']=='failed' and failed['result']['code']=='resource_interrupted'
+
+
+def test_legacy_completed_lyric_miss_releases_manual_job_after_eight_seconds(tmp_path):
+    store=JobStore(tmp_path/'jobs.db')
+    first=store.submit(1,'lyrics',{'refresh':True})
+    with patch('backend.resource_jobs.time.time',return_value=time.time()) as clock:
+        store.finish(store.claim(),{'status':'missing','retry_after':300})
+        assert response(store.get(first['id']))['result']['retry_after']==8
+        clock.return_value+=9
+        assert store.submit(1,'lyrics',{'refresh':True})['id']!=first['id']
+
+
+def test_lyric_provider_limit_is_reported_without_waiting_in_queue(app):
+    manager=app.extensions['resource_queue']
+    job=manager.store.submit(2,'lyrics',{})
+    with patch('backend.resource_jobs.perform',side_effect=ProviderError('limited','provider_rate_limited',503,30)):
+        manager.run(manager.store.claim())
+    result=response(manager.store.get(job['id']))
+    assert result['status']=='failed' and result['result']['retry_after']==30

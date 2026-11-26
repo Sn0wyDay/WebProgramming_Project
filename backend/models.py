@@ -95,6 +95,7 @@ class ReviewLink(db.Model):
     review_id = db.Column(db.Integer, db.ForeignKey('review.id'), primary_key=True, index=True)
     kind = db.Column(db.String(16), nullable=False)
     context = db.Column(db.String(500))
+    match_version = db.Column(db.Integer, nullable=False, server_default='0')
     __table_args__ = (db.CheckConstraint("kind IN ('song','album','album_track')"),)
 
 

@@ -82,3 +82,11 @@ def test_actual_failure_shape_resolves_without_musicbrainz_and_persists(tmp_path
         assert lookup().json['from_database'] is True
         detail=other.get('/api/songs/1').json
         assert len(detail['passages'])==2 and detail['lyrics_status']=='available'
+
+
+def test_recording_search_retains_only_matching_release_track_titles():
+    from backend.providers import musicbrainz
+    record={'id':MBID,'title':'눈사림','artist-credit':[{'name':'정승환'}],
+            'releases':[{'media':[{'track':[{'title':'The Snowman'}]}]},
+                        {'media':[{'tracks':[{'title':'Another recording on this release'}]}]}]}
+    assert musicbrainz.normalize(record)['release_titles']==['The Snowman']

@@ -18,8 +18,11 @@ def create_app(config=None):
     @app.get('/')
     def index():
         return app.send_static_file('index.html')
+    database_url = os.environ.get('DATABASE_URL')
+    if database_url and database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
     app.config.update(SECRET_KEY=os.environ.get('SECRET_KEY'),
-        SQLALCHEMY_DATABASE_URI=os.environ.get('DATABASE_URL'),
+        SQLALCHEMY_DATABASE_URI=database_url,
         SESSION_TYPE='sqlalchemy', SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('APP_ENV') == 'production',
         PERMANENT_SESSION_LIFETIME=timedelta(hours=12), MAX_CONTENT_LENGTH=16384)
@@ -30,6 +33,8 @@ def create_app(config=None):
         raise RuntimeError('운영 환경에서는 SECRET_KEY와 DATABASE_URL을 설정하세요.')
     if not app.config['SQLALCHEMY_DATABASE_URI']:
         app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///preview.db'
+    elif app.config['SQLALCHEMY_DATABASE_URI'].startswith('postgresql'):
+        app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {'pool_pre_ping': True})
     if not app.config['SECRET_KEY']:
         # Keep the local signing key across restarts; never ship it in Git.
         instance = Path(app.instance_path)

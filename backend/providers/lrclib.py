@@ -1,10 +1,14 @@
 import math
 import re
+import time
 import unicodedata
-from flask import current_app,has_app_context
+from flask import current_app,g,has_app_context,has_request_context
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler,build_opener
 from .http import JsonClient, ProviderError
+
+
+MISS_RETRY_SECONDS = 8
 
 
 class LyricsRedirects(HTTPRedirectHandler):
@@ -15,6 +19,19 @@ class LyricsRedirects(HTTPRedirectHandler):
 
 
 class LyricsClient(JsonClient):
+    retry_unhinted_503=True
+
+    def _read(self,key,store):
+        row=super()._read(key,store)
+        # Do not replay a previous 404/empty response when the user retries.
+        if row and time.time()-row['saved'] >= MISS_RETRY_SECONDS:
+            if row['value'] in (None, []):
+                return None
+            if has_request_context() and getattr(g,'recheck_lyric_miss',False):
+                # Revalidate previous search results that contained only other songs.
+                return dict(row,expires=0)
+        return row
+
     def headers(self):
         headers=super().headers()
         key=current_app.config.get('LRCLIB_API_KEY') if has_app_context() else None
@@ -147,14 +164,6 @@ def find(title, artist, duration_ms=None, aliases=(), title_aliases=(), album=No
             raise ProviderError('가사 제공처의 곡 ID가 일치하지 않습니다.')
         result=direct(row)
         if result:return result
-    # A signature lookup does not depend on the provider's search index.
-    # Explicit aliases are tried before any broader search, never guessed.
-    for query in queries:
-        params={'track_name':query,'artist_name':provider_artist}
-        if album:params['album_name']=album
-        if duration_ms and 1000<=duration_ms<=3600000:params['duration']=duration_ms/1000
-        result=direct(client.get('/api/get',params))
-        if result:return result
     def choose(rows,query):
         matches=[]
         for row in rows:
@@ -169,13 +178,41 @@ def find(title, artist, duration_ms=None, aliases=(), title_aliases=(), album=No
             delta=abs(row['duration']-duration_ms/1000) if duration_ms else 0
             return (not album_match,delta,normalized(row['title'])!=normalized(query),int(row['external_id']))
         return min(matches,key=rank) if matches else None
+    searches=[(query,params) for query in queries for params in (
+        {'track_name':query,'artist_name':provider_artist}, {'track_name':query}
+    )]
+    # A verified search hit already on disk can satisfy a lookup during an outage.
+    signatures=[]
     for query in queries:
-        result=choose(search_rows({'track_name':query,'artist_name':provider_artist}),query)
+        params={'track_name':query,'artist_name':provider_artist}
+        if album:params['album_name']=album
+        if duration_ms and 1000<=duration_ms<=3600000:params['duration']=duration_ms/1000
+        signatures.append(params)
+    if not preferred_id:
+        for params in signatures:
+            cached=client.cached('/api/get',params)
+            result=direct(cached) if isinstance(cached,dict) else None
+            if result:return result
+        for query,params in searches:
+            rows=client.cached('/api/search',params)
+            if isinstance(rows,list):
+                result=choose(rows,query)
+                if result:return result
+    # A signature lookup does not depend on the provider's search index.
+    # Explicit aliases are tried before any broader search, never guessed.
+    signature_timeout=None
+    for params in signatures:
+        try:
+            result=direct(client.get('/api/get',params))
+        except ProviderError as error:
+            if error.code!='provider_timeout':raise
+            signature_timeout=error
+            break
         if result:return result
-        # The provider's artist filter cannot expand aliases; title-only search
-        # retrieves those rows, then the same strict local identity checks apply.
-        result=choose(search_rows({'track_name':query}),query)
+    for query,params in searches:
+        result=choose(search_rows(params),query)
         if result:return result
+    if signature_timeout:raise signature_timeout
     return None
 
 

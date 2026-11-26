@@ -9,7 +9,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from flask import current_app,g
+from flask import current_app,g,has_app_context
 from .providers.http import ProviderError
 
 
@@ -35,13 +35,20 @@ class JobStore:
         finally:conn.close()
 
     def submit(self,song_id,kind,options,identity=None):
+        if kind=='catalog':
+            from .providers.musicbrainz import corrected_recording_ids
+            if corrected_recording_ids(options['query']):
+                identity='corrected-search'
+        elif kind=='reviews':
+            from .reviews import MATCH_RULE_VERSION
+            identity=f'{song_id}:{MATCH_RULE_VERSION}'
         options=json.dumps(options,sort_keys=True,separators=(',',':'))
         key=hashlib.sha256(f'{kind}:{identity or song_id}:{options}'.encode()).hexdigest()
         now=time.time()
         with self.connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
             row=conn.execute('SELECT * FROM jobs WHERE job_key=?',(key,)).fetchone()
-            if row and (row['status'] in ('queued','running') or row['reuse_until']>now):return dict(row)
+            if row and (row['status'] in ('queued','running') or reuse_until(row)>now):return dict(row)
             pending=conn.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]
             if pending>=128:raise ProviderError('조회 대기 중인 자료가 많습니다. 잠시 뒤 다시 시도해 주세요.','resource_busy',503,5)
             conn.execute('INSERT OR REPLACE INTO jobs(job_key,id,kind,song_id,options,status,created,due) VALUES (?,?,?,?,?,?,?,?)',
@@ -95,7 +102,7 @@ def perform(job):
         return lookup(song,**json.loads(job['options']))
     if job['kind']=='reviews':
         from .reviews import lookup
-        return lookup(song)
+        return lookup(song,**json.loads(job['options']))
     from .artwork_service import lookup
     return lookup(song)
 
@@ -136,6 +143,7 @@ class ResourceQueue:
             self.wake.wait(1);self.wake.clear()
 
     def run(self,job):
+        retry_window={'lyrics':5,'reviews':0}.get(job['kind'],60)
         try:
             # Give the worker its own context and database session, never the
             # originating request's session, cookies, or personal records.
@@ -145,11 +153,11 @@ class ResourceQueue:
                 if getattr(g,'provider_status',None):result['_provider_status']=g.provider_status
             retryable=result.get('status')=='unavailable' or result.get('refresh_failed')
             delay=max(2,result.get('retry_after',15))
-            if retryable and job['attempts']<2 and delay<=60:self.store.retry(job,delay)
+            if retryable and job['attempts']<2 and delay<=retry_window:self.store.retry(job,delay)
             else:self.store.finish(job,result)
         except ProviderError as error:
             delay=max(2,error.retry_after or 5)
-            if error.status>=500 and job['attempts']<2 and delay<=60:self.store.retry(job,delay)
+            if error.status>=500 and job['attempts']<2 and delay<=retry_window:self.store.retry(job,delay)
             else:self.store.finish(job,dict(error=str(error),code=error.code,retry_after=delay),failed=True)
         except Exception:
             self.app.logger.exception('Public resource job failed: kind=%s song_id=%s',job['kind'],job['song_id'])
@@ -161,10 +169,31 @@ def queue():
     return app.extensions['resource_queue']
 
 
+def reuse_until(job):
+    # Older completed lyric misses advertised a five-minute manual lockout.
+    end=job['reuse_until']
+    if job['kind']=='lyrics' and job['status']=='completed':
+        result=json.loads(job['result'])
+        if result.get('status')=='missing':
+            from .providers.lrclib import MISS_RETRY_SECONDS
+            end-=max(0,result.get('retry_after',0)-MISS_RETRY_SECONDS)
+    return end
+
+
 def response(job):
     if job['status'] in ('completed','failed'):
         result=json.loads(job['result'])
-        if result.get('retry_after',0)>0:result['retry_after']=max(0,math.ceil(job['reuse_until']-time.time()))
+        if job['kind']=='catalog' and 'items' in result:
+            from .providers.musicbrainz import corrected_page
+            result=corrected_page(result)
+        if job['kind']=='reviews' and result.get('status')=='available' and has_app_context():
+            from . import db
+            from .models import Song
+            from .reviews import for_song
+            song=db.session.get(Song,job['song_id'])
+            items=for_song(song) if song is not None else []
+            result={**result,'reviews':items} if items else dict(status='missing',reviews=[],retry_after=0)
+        if result.get('retry_after',0)>0:result['retry_after']=max(0,math.ceil(reuse_until(job)-time.time()))
         return dict(status=job['status'],job_id=job['id'],result=result)
     return dict(status='pending',state=job['status'],job_id=job['id'],attempt=job['attempts'],
                 retry_after=max(0,round(job['due']-time.time())),poll_after_ms=900)

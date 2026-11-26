@@ -43,8 +43,31 @@ def test_matching_rejects_homonyms_mentions_and_other_versions():
     assert izm.match(album,'A',['Artist'],'Different album') is None
     assert izm.match(album,'A',['Artist'],'Album')=='album'
     album['tracks']=['A (Feat. Guest)']
-    assert izm.match(album,'A',['Artist'])=='album_track'
-    assert izm.match(album,'A (instrumental)',['Artist'],instrumental=True) is None
+    assert izm.match(album,'A',['Artist']) is None
+    assert izm.match(album,'A',['Artist'],release_names=['Album'])=='album_track'
+    assert izm.match(album,'A (instrumental)',['Artist'],instrumental=True,release_names=['Album']) is None
+
+
+def test_album_track_credits_do_not_hide_review_or_change_recording_version():
+    content=('리메이크 앨범 평론. <br> -수록곡- <br> '
+             '1. 제주도의 푸른밤 (작사: 최성원 / 작곡: 최성원) <br> '
+             '2. 별이 진다네 (조병석 / 조병석) <br> '
+             '3. 세 번째 곡 (Live) (작사: 홍길동 / 작곡: 홍길동)')
+    reviewed=izm.normalize_search(search_response([], [raw_row(title='제주도의 푸른밤',artist='성시경',rid=3017,content=content)]))[0]
+    releases=['제주도의 푸른 밤']
+    with patch.object(izm.client,'get',side_effect=AssertionError('Already in artist search cache')):
+        def cached(path,params):
+            return [reviewed] if params['keyword']=='성시경' else None
+        with patch.object(izm.client,'cached',side_effect=cached):
+            linked=izm.find('제주도의 푸른 밤','성시경','푸른밤의 꿈',release_names=releases)
+    assert linked[0]['relation']=='album_track' and linked[0]['url']=='https://www.izm.co.kr/posts?id=3017'
+    assert izm.match(reviewed,'별이 진다네',['성시경'],release_names=releases)=='album_track'
+    assert izm.match(reviewed,'별이 진다네',['성시경'],release_names=['다른 앨범']) is None
+    assert izm.match(reviewed,'제주도의 푸른 밤',['최성원'],release_names=releases) is None
+    assert izm.match(reviewed,'제주도의 푸른 밤 (Inst.)',['성시경'],instrumental=True,release_names=releases) is None
+    assert izm.match(reviewed,'세 번째 곡',['성시경'],release_names=releases) is None
+    assert izm.match(reviewed,'세 번째 곡 (Live)',['성시경'],release_names=releases)=='album_track'
+    assert izm.match({**reviewed,'tracks':['곡 (사랑 / 슬픔)']},'곡',['성시경'],release_names=releases) is None
 
 
 def test_public_search_only_uses_artist_verified_korean_alias():
@@ -96,13 +119,16 @@ def test_unresolved_artist_failure_is_not_reported_as_no_review():
 
 @pytest.fixture(scope='module')
 def app(tmp_path_factory):
-    app=create_app({'TESTING':True,'SECRET_KEY':'test','SESSION_SQLALCHEMY_TABLE':'review_test_sessions','SQLALCHEMY_DATABASE_URI':'sqlite:///'+str(tmp_path_factory.mktemp('reviews')/'test.db')})
+    folder=tmp_path_factory.mktemp('reviews')
+    app=create_app({'TESTING':True,'SECRET_KEY':'test','SESSION_SQLALCHEMY_TABLE':'review_test_sessions',
+                    'SQLALCHEMY_DATABASE_URI':'sqlite:///'+str(folder/'test.db'),'RESOURCE_JOB_PATH':str(folder/'review-jobs.db')})
     with app.app_context():
         db.create_all()
         db.session.add(User(id=1,email='review@example.com',username='review',name='Test',password_hash='unused'))
         db.session.add_all([Song(id=n,provider='test',external_id=str(n),title='Song '+str(n),artist='Artist') for n in range(1,6)])
         db.session.commit()
-    return app
+    yield app
+    app.extensions['resource_queue'].close()
 
 
 @pytest.fixture(autouse=True)
@@ -150,7 +176,7 @@ def test_api_missing_and_failure_are_separate_and_both_throttled(app):
         assert find.call_count==1
     with patch.object(izm,'find',side_effect=ProviderError('timeout','provider_timeout',504)) as find:
         for _ in range(2):
-            r=send(c,'/songs/4/reviews');assert r.json['status']=='unavailable' and r.json['retry_after']>=59
+            r=send(c,'/songs/4/reviews');assert r.json['status']=='unavailable' and r.json['retry_after']==3
         assert find.call_count==1
         assert c.get('/api/songs/4').status_code==200
 
@@ -168,3 +194,56 @@ def test_migration_keeps_legacy_review_and_backfills_its_link(tmp_path):
         assert reviews.for_song(song)[0]['title']=='Legacy Article'
         assert reviews.for_song(song)[0]['kind']=='song'
         assert reviews.for_song(song)[0]['article_type']=='review'
+
+
+def test_verified_album_review_can_be_reused_for_another_track_offline():
+    row=izm.normalize_search(search_response([], [raw_row(title='Album',artist='Artist')]))[0]
+    def cached(path,params):
+        return [row] if params['keyword']=='Album' else None
+    with patch.object(izm.client,'cached',side_effect=cached),patch.object(izm.client,'get',side_effect=AssertionError('Offline')):
+        assert izm.find('Other Song','Artist','Album')[0]['relation']=='album'
+
+
+def test_homonymous_recordings_recheck_saved_track_links_by_recording_id(app):
+    matching_id='d0ea4b20-5f4c-4e49-9fdb-e585d810d9da'
+    other_id='a56d8553-96f4-4943-b29a-e6913cc7f800'
+    row=izm.normalize_search(search_response([], [
+        raw_row(title='Reviewed Album',artist='가수',rid=1234,
+                content='<p>Review excerpt.</p><p>-수록곡-</p><p>1. 동명곡 (작사: 홍길동)</p>'),
+    ]))[0]
+    with app.app_context():
+        first=Song(id=6,provider='musicbrainz',external_id=matching_id,title='동명곡',artist='가수')
+        second=Song(id=7,provider='musicbrainz',external_id=other_id,title='동명곡',artist='가수')
+        db.session.add_all([first,second]);db.session.commit()
+        reviews.save(first,[{**row,'relation':'album_track'}])
+        reviews.save(second,[{**row,'relation':'album_track'}])
+        review=db.session.scalar(db.select(Review).where(Review.url==row['url']))
+        for song in (first,second):
+            db.session.get(ReviewLink,(song.id,review.id)).match_version=0
+        db.session.commit()
+        review_id=review.id
+
+    store=app.extensions['resource_queue'].store
+    with patch.object(reviews,'MATCH_RULE_VERSION',3):
+        old_job=store.submit(7,'reviews',{})
+    store.finish(store.claim(),dict(status='available',reviews=[row]))
+
+    def recording(path,params):
+        recording_id=path.rsplit('/',1)[1]
+        assert params=={'inc':'artists+releases','fmt':'json'}
+        official='Reviewed Album' if recording_id==matching_id else 'Different Album'
+        return dict(id=recording_id,releases=[
+            dict(title=official,status='Official'),
+            dict(title='Reviewed Album',status='Bootleg'),
+        ])
+
+    c=app.test_client();login(c)
+    assert c.get('/api/resource-jobs/'+old_job['id']).json['result']['reviews']==[]
+    assert c.get('/api/songs/6').json['reviews']==[]
+    assert c.get('/api/songs/7').json['reviews']==[]
+    with patch.object(izm.client,'get',return_value=[row]),patch.object(musicbrainz.client,'get',side_effect=recording):
+        assert send(c,'/songs/6/reviews').json['reviews'][0]['id']==review_id
+        assert send(c,'/songs/7/reviews').json['status']=='missing'
+    assert c.get('/api/songs/6').json['reviews'][0]['kind']=='album_track'
+    assert c.get('/api/songs/7').json['reviews']==[]
+    assert store.submit(7,'reviews',{})['id']!=old_job['id']

@@ -132,3 +132,34 @@ print('restart cache ok')
     result=subprocess.run([sys.executable,'-c',script,str(path)],text=True,capture_output=True,timeout=5)
     assert result.returncode==0,result.stderr
     assert 'restart cache ok' in result.stdout
+
+
+def test_unhinted_503_can_recover_without_locking_out_unrelated_lyric_requests():
+    from backend.providers.lrclib import LyricsClient
+    c=LyricsClient(BASE,0)
+    with patch.object(c,'open',side_effect=[HTTPError(BASE,503,'Unavailable',{},None),response({'id':1}),response({'id':2})]) as network,patch('backend.providers.http.time.sleep'):
+        assert c.get('/first')=={'id':1}
+        assert c.get('/second')=={'id':2}
+        assert network.call_count==3
+
+
+def test_explicit_503_retry_after_is_respected_by_review_client():
+    from backend.providers.izm import ReviewSearchClient
+    c=ReviewSearchClient(BASE,0)
+    with patch.object(c,'open',side_effect=HTTPError(BASE,503,'Unavailable',{'Retry-After':'60'},None)) as network:
+        for path in ['/first','/second']:
+            with pytest.raises(ProviderError) as error:c.get(path)
+            assert error.value.code=='provider_rate_limited' and error.value.retry_after>=59
+        assert network.call_count==1
+
+
+def test_interrupted_response_read_is_retried_before_caching():
+    from http.client import IncompleteRead
+    from unittest.mock import MagicMock
+    interrupted=MagicMock()
+    interrupted.__enter__.return_value.read.side_effect=IncompleteRead(b'{',10)
+    c=JsonClient(BASE,0)
+    with patch.object(c,'open',side_effect=[interrupted,response({'id':3})]) as network,patch('backend.providers.http.time.sleep'):
+        assert c.get('/song')=={'id':3}
+        assert c.get('/song')=={'id':3}
+        assert network.call_count==2

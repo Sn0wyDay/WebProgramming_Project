@@ -1,10 +1,12 @@
 """Lyric lookup state and availability; network failures never mean 'no lyrics'."""
 import math
 from datetime import datetime,timedelta,timezone
+from flask import g,has_request_context
 from sqlalchemy.exc import IntegrityError
 from . import db
 from .models import LyricVersion,LyricLookup
 from .music import fetch_lyrics,lyric_candidates
+from .providers.lrclib import MISS_RETRY_SECONDS
 from .providers.versions import is_instrumental
 from .providers.http import ProviderError,report
 
@@ -22,6 +24,13 @@ def now():return datetime.now(timezone.utc).replace(tzinfo=None)
 
 def remaining(state):
     return max(0,math.ceil((state.retry_at-now()).total_seconds())) if state and state.retry_at else 0
+
+
+def manual_wait(state):
+    if state and state.status == 'missing':
+        elapsed = (now() - state.checked_at).total_seconds()
+        return min(remaining(state), max(0, math.ceil(MISS_RETRY_SECONDS - elapsed)))
+    return remaining(state)
 
 
 def latest(song):
@@ -46,7 +55,8 @@ def availability(song):
     if latest(song):status='available'
     elif song.is_instrumental or is_instrumental(song.title):status='instrumental'
     else:status=state.status if state else 'unqueried'
-    return dict(lyrics_status=status,lyrics_message=MESSAGES.get(status,''),lyrics_retry_after=remaining(state) if state and state.status in ('error','missing') else 0)
+    return dict(lyrics_status=status,lyrics_message=MESSAGES.get(status,''),lyrics_retry_after=manual_wait(state) if state and state.status in ('error','missing') else 0,
+                lyrics_auto_retry_after=remaining(state) if state and state.status in ('error','missing') else 0)
 
 
 def lookup(song,refresh=False,candidate_id=None):
@@ -57,13 +67,15 @@ def lookup(song,refresh=False,candidate_id=None):
         save_state(song,'instrumental')
         return dict(status='instrumental',message=MESSAGES['instrumental'])
     prior=db.session.get(LyricLookup,song.id)
-    wait=remaining(prior)
+    wait=manual_wait(prior) if refresh else remaining(prior)
     if prior and prior.status=='error' and wait and candidate_id is None:
         if existing:
             return dict(status='available',version_id=existing.id,from_database=True,refresh_failed=True,retry_after=wait,message=MESSAGES['error']+' 저장된 가사를 표시합니다.')
         raise ProviderError(MESSAGES['error'],prior.error_code or 'provider_error',503,wait)
     if prior and prior.status=='missing' and wait and candidate_id is None:
-        return dict(status='missing',cached=True,retry_after=wait,message=MESSAGES['missing'])
+        return dict(status='missing',cached=True,retry_after=manual_wait(prior),message=MESSAGES['missing'])
+    if refresh and prior and prior.status=='missing' and has_request_context():
+        g.recheck_lyric_miss=True
     try:
         version=fetch_lyrics(song,candidate_id=candidate_id)
         if version:
@@ -75,10 +87,10 @@ def lookup(song,refresh=False,candidate_id=None):
             return dict(status='available',version_id=existing.id,from_database=True,refresh_failed=True,message='새 가사를 찾지 못해 저장된 가사를 유지했습니다.')
         status='unmatched' if candidates else 'missing'
         save_state(song,status,300)
-        return dict(status='candidates' if candidates else 'missing',message=MESSAGES[status],retry_after=0 if candidates else 300,candidates=[dict(id=int(c['external_id']),title=c['title'],artist=c['artist'],album=c['album'],duration=c['duration'],preview='\n'.join(c['text'].splitlines()[:2])[:400]) for c in candidates])
+        return dict(status='candidates' if candidates else 'missing',message=MESSAGES[status],retry_after=0 if candidates else MISS_RETRY_SECONDS,candidates=[dict(id=int(c['external_id']),title=c['title'],artist=c['artist'],album=c['album'],duration=c['duration'],preview='\n'.join(c['text'].splitlines()[:2])[:400]) for c in candidates])
     except ProviderError as error:
         if error.status<500 and error.status!=429:raise
-        delay=max(15,error.retry_after)
+        delay=error.retry_after or 3
         save_state(song,'error',delay,error.code)
         if existing:
             report('stale','가사 갱신에 실패해 저장된 가사를 표시합니다.')

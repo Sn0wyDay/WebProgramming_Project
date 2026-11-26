@@ -1,8 +1,6 @@
 """Import provider-verified metadata and append immutable lyric snapshots."""
 import hashlib
-import json
 import re
-from pathlib import Path
 from sqlalchemy.exc import IntegrityError
 from . import db
 from .models import Song, Album, LyricVersion, Passage
@@ -51,8 +49,7 @@ def artist_aliases(song):
 
 def verified_lyric_rule(song,album):
     if song.provider!='musicbrainz':return {}
-    rules=json.loads((Path(__file__).parent/'data/title_aliases.json').read_text())
-    rule=rules.get(song.external_id)
+    rule=musicbrainz.title_rules().get(song.external_id)
     if (rule and rule['title']==song.title and rule['artist']==song.artist
             and musicbrainz.name_key(rule['album'])==musicbrainz.name_key(album or '')
             and song.duration_ms and abs(rule['duration_ms']-song.duration_ms)<=2000):return rule
@@ -65,7 +62,9 @@ def alternate_titles(song, album):
     rule=verified_lyric_rule(song,album)
     if rule:
         return rule['alternate_titles'][:2]
-    return musicbrainz.recording_titles(song.external_id,allow_network=False)
+    snapshot=musicbrainz.client.recall(song.external_id) or {}
+    names=snapshot.get('release_titles', [])+musicbrainz.recording_titles(song.external_id,allow_network=False)
+    return [name for name in dict.fromkeys(names) if lrclib.same_version(song.title,name)][:2]
 
 
 def lyric_candidates(song):

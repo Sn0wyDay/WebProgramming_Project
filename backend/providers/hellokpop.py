@@ -2,8 +2,8 @@
 import re
 from urllib.parse import urlsplit
 from bs4 import BeautifulSoup
-from .http import JsonClient,ProviderError
-from .izm import text_blocks
+from .http import ProviderError
+from .izm import ReviewSearchClient,text_blocks
 from .review_matching import same_artist,same_title
 
 SOURCE='HELLOKPOP'
@@ -43,7 +43,7 @@ def normalize_search(data):
     return articles
 
 
-client=JsonClient('https://www.hellokpop.com/wp-json/wp/v2',1.05,transform=normalize_search)
+client=ReviewSearchClient('https://www.hellokpop.com/wp-json/wp/v2',1.05,transform=normalize_search)
 
 
 def find(title,artist,album=None,title_aliases=(),artist_names=(),instrumental=False):

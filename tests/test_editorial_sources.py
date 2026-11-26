@@ -79,9 +79,9 @@ def client(app):
     return c
 
 
-def send(c):
+def send(c,data=None):
     token=c.get('/api/session').json['csrf_token']
-    return c.post('/api/songs/1/reviews',json={},headers={'X-CSRFToken':token})
+    return c.post('/api/songs/1/reviews',json=data or {},headers={'X-CSRFToken':token})
 
 
 def test_secondary_source_recovers_primary_failure_and_saves_type(app):
@@ -126,3 +126,37 @@ def test_provider_budget_is_restored_for_next_source(app):
         deadline=time.monotonic()+18;g.provider_deadline=deadline
         with reviews.provider_budget(1):assert g.provider_deadline<deadline-15
         assert g.provider_deadline==deadline
+
+
+def test_manual_review_retry_checks_both_providers_after_eight_seconds(app):
+    c=client(app)
+    import time
+    with patch('backend.reviews.time.time',return_value=time.time()) as clock, patch.object(izm,'find',return_value=[]) as iz, patch.object(hellokpop,'find',return_value=[]) as hk:
+        assert send(c).json=={'status':'missing','reviews':[],'retry_after':8}
+        clock.return_value+=3
+        assert send(c,{'refresh':True}).json['retry_after']==5
+        clock.return_value+=5
+        assert send(c).json['retry_after']==0
+        assert iz.call_count==hk.call_count==1
+        assert send(c,{'refresh':True}).json['retry_after']==8
+        assert iz.call_count==hk.call_count==2
+
+
+def test_review_refresh_revalidates_unmatched_rows_and_honors_rate_limit(app):
+    c=client(app)
+    import time
+    with patch('backend.reviews.time.time',return_value=time.time()) as clock, patch.object(izm.client,'open',side_effect=AssertionError('unexpected HTTP')):
+        with app.test_request_context():
+            params={'keyword':'Unrelated'}
+            from urllib.parse import urlencode
+            izm.client._write('/content/search/?'+urlencode(params),[{'title':'Unrelated'}],None)
+            clock.return_value+=9
+            assert izm.client.get('/content/search/',params)==[{'title':'Unrelated'}]
+            g.refresh_reviews=True
+            with pytest.raises(AssertionError,match='unexpected HTTP'):
+                izm.client.get('/content/search/',params)
+        with patch.object(izm,'find',side_effect=ProviderError('limited','provider_rate_limited',503,25)) as iz, patch.object(hellokpop,'find',return_value=[]):
+            assert send(c).json=={'status':'unavailable','reviews':[],'retry_after':25}
+            clock.return_value+=8
+            assert send(c,{'refresh':True}).json['retry_after']==17
+            assert iz.call_count==1

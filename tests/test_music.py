@@ -249,7 +249,7 @@ def test_temporary_failure_is_not_missing_and_cooldown_is_preserved(app):
     sid=lyric_test_song(app,'오류와 미등록 구분')
     with patch.object(lrclib,'find',side_effect=ProviderError('temporary','provider_timeout',504)) as provider:
         r=send(c,f'/songs/{sid}/lyrics')
-        assert r.status_code==504 and r.json['retry_after']>=15
+        assert r.status_code==504 and r.json['retry_after']==3
         assert c.get(f'/api/songs/{sid}').json['lyrics_status']=='error'
         repeated=send(c,f'/songs/{sid}/lyrics',data={'refresh':True})
         assert repeated.status_code==503 and repeated.json['retry_after']>0
@@ -288,3 +288,22 @@ def test_confirmed_no_match_is_distinct_and_cached(app):
 def test_only_version_qualifiers_mark_instrumental(title,expected):
     from backend.providers.versions import is_instrumental
     assert is_instrumental(title)==expected
+
+
+def test_manual_retry_reaches_provider_while_automatic_miss_is_cached(app):
+    from datetime import timedelta
+    from backend.lyric_service import now
+    from backend.models import LyricLookup
+    c=lyric_test_client(app,'manual_miss')
+    sid=lyric_test_song(app,'수동 재조회')
+    with patch.object(lrclib,'find',return_value=None),patch.object(lrclib,'candidates',return_value=[]):
+        assert send(c,f'/songs/{sid}/lyrics').json['retry_after']==8
+    with app.app_context():
+        db.session.get(LyricLookup,sid).checked_at=now()-timedelta(seconds=9)
+        db.session.commit()
+    detail=c.get(f'/api/songs/{sid}').json
+    assert detail['lyrics_retry_after']==0 and detail['lyrics_auto_retry_after']>200
+    with patch.object(lrclib,'find',return_value=dict(text='테스트',source_url='https://lrclib.net/api/get/77')) as lookup:
+        assert send(c,f'/songs/{sid}/lyrics').json['cached']
+        assert send(c,f'/songs/{sid}/lyrics',data={'refresh':True}).json['status']=='available'
+        assert lookup.call_count==1

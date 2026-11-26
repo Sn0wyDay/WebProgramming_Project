@@ -5,10 +5,16 @@ async function api(path,method='GET',data){
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
  try{
   const r=await fetch('/api'+path,{method,signal:controller.signal,headers:{'Content-Type':'application/json','X-CSRFToken':csrf},body:data===undefined?undefined:JSON.stringify(data)});
-  const j=await r.json();
-  if(!r.ok){if(r.status===401){user=null;auth();}const error=Error(j.error||'요청 실패');error.code=j.code;error.retry_after=j.retry_after||0;throw error;}
+  const j=r.ok?await r.json():await r.json().catch(()=>({}));
+  if(!r.ok){
+   if(r.status===401){user=null;auth();}
+   const header=r.headers.get('Retry-After');
+   const seconds=header&&/^\d+$/.test(header)?Number(header):Math.ceil((Date.parse(header)-Date.now())/1000);
+   const error=Error(j?.error||'요청 실패');error.status=r.status;error.code=j?.code;
+   error.retry_after=Math.max(0,Number(j?.retry_after)||0,seconds||0);throw error;
+  }
   return j;
- }catch(e){if(e.name==='AbortError')throw Error('응답 시간이 초과되었습니다. 다시 시도해 주세요.');throw e;}
+ }catch(e){if(e.name==='AbortError'){const error=Error('응답 시간이 초과되었습니다. 다시 시도해 주세요.');error.code='request_timeout';throw error;}throw e;}
  finally{clearTimeout(timer);}
 }
 const btn=(label,action,id='')=>`<button class="button outline" data-action="${action}" data-id="${esc(id)}">${label}</button>`;
@@ -166,9 +172,9 @@ function nav(){
 }
 let renderSeq=0;
 async function render(){
- renderSeq++;nav();if(!user)return auth();const [route,id]=location.hash.slice(1).split('/');
+ renderSeq++;nav();if(!user)return auth();const [route,id,section,item]=location.hash.slice(1).split('/');
  REHome.leave();
- if(route==='song')await REHome.renderSong(Number(id));
+ if(route==='song')await REHome.renderSong(Number(id),section==='comment'?item:null);
  else if(route==='shared')await Friends.shared(id);
  else if(route==='friend')await Friends.profile(id);
  else if(route==='friends'){await Friends.mount();

@@ -129,18 +129,22 @@ def users():
 @login_required
 def friendship(other):
     if not db.session.get(User,other): abort(404)
-    key=pair(other); relation=db.session.get(Friendship,key)
-    if request.method=='POST':
-        if relation: return jsonify(error='이미 요청 또는 친구 관계가 있습니다.'),409
-        relation=Friendship(low_id=key[0],high_id=key[1],requester_id=session['user_id'])
-        db.session.add(relation)
-    elif request.method=='PATCH':
-        if not relation: abort(404)
-        if relation.requester_id==session['user_id'] or relation.accepted: abort(403)
-        relation.accepted=True
+    key=pair(other)
+    if request.method=='PATCH':
+        result=db.session.execute(db.update(Friendship).where(
+            Friendship.low_id==key[0],Friendship.high_id==key[1],
+            Friendship.requester_id!=session['user_id'],Friendship.accepted.is_(False),
+        ).values(accepted=True))
+        if not result.rowcount:
+            abort(403 if db.session.get(Friendship,key) else 404)
     else:
-        if not relation: abort(404)
-        db.session.delete(relation)
+        relation=db.session.get(Friendship,key)
+        if request.method=='POST':
+            if relation: return jsonify(error='이미 요청 또는 친구 관계가 있습니다.'),409
+            db.session.add(Friendship(low_id=key[0],high_id=key[1],requester_id=session['user_id']))
+        else:
+            if not relation: abort(404)
+            db.session.delete(relation)
     try: db.session.commit()
     except IntegrityError:
         db.session.rollback(); return jsonify(error='중복 요청입니다.'),409
@@ -178,12 +182,40 @@ def home_data():
     return jsonify(items=[song_summary(s) for s in result.items],pages=result.pages,total=result.total,comment_count=note_count)
 
 
+def search_options(data):
+    field = data.get('field', 'all')
+    if field not in ('all', 'title', 'artist', 'combined'):
+        abort(400)
+    if field == 'combined':
+        for key in ('artist', 'q'):
+            value = data.get(key)
+            if not isinstance(value, str) or not 1 <= len(value.strip()) <= 100:
+                abort(400)
+        return {'field': field, 'artist': data['artist'].strip()}
+    return {'field': field} if field != 'all' else {}
+
+
 @api.get('/songs')
 @login_required
 def songs():
     q=request.args.get('q','').strip()[:100]
+    options=search_options(request.args)
+    field=options.get('field','all')
     stmt=db.select(Song)
-    if q: stmt=stmt.where(db.or_(Song.title.contains(q,autoescape=True),Song.artist.contains(q,autoescape=True),Song.id.in_(db.select(LyricVersion.song_id).join(Passage,Passage.version_id==LyricVersion.id).where(Passage.text.contains(q,autoescape=True)))))
+    if q:
+        filters=[]
+        if field in ('all','title','combined'):
+            filters.append(Song.title.contains(q,autoescape=True))
+            corrected_ids=musicbrainz.corrected_recording_ids(q,title_only=field!='all')
+            if corrected_ids:
+                filters.append(db.and_(Song.provider=='musicbrainz',Song.external_id.in_(corrected_ids)))
+        if field in ('all','artist'):
+            filters.append(Song.artist.contains(q,autoescape=True))
+        if field=='all':
+            filters.append(Song.id.in_(db.select(LyricVersion.song_id).join(Passage,Passage.version_id==LyricVersion.id).where(Passage.text.contains(q,autoescape=True))))
+        stmt=stmt.where(db.or_(*filters))
+        if field=='combined':
+            stmt=stmt.where(Song.artist.contains(options['artist'],autoescape=True))
     result=page_query(stmt.order_by(Song.id))
     return jsonify(items=[song_summary(s) for s in result.items],pages=result.pages,notice='저장된 곡·가수·가사 검색입니다.')
 
@@ -198,11 +230,17 @@ def song_detail(sid):
     return jsonify(**song_summary(s),provider=s.provider,external_id=s.external_id,passages=[dict(id=p.id,text=p.text,version_id=p.version_id) for p in passages],source_url=version.source_url if version else None,lyrics_title=version.matched_title if version else None,lyrics_match=version.match_method if version else None,reviews=for_song(s))
 
 
+def review_options(data):
+    if set(data)-{'refresh'} or type(data.get('refresh',False)) is not bool:abort(400)
+    return dict(refresh=data.get('refresh',False))
+
+
 @api.post('/songs/<int:sid>/reviews')
 @login_required
 def song_reviews(sid):
     from .reviews import lookup
-    return jsonify(lookup(db.get_or_404(Song,sid)))
+    data=body() if request.get_data() else {}
+    return jsonify(lookup(db.get_or_404(Song,sid),**review_options(data)))
 
 
 @api.post('/songs/<int:sid>/artwork')
@@ -230,6 +268,7 @@ def start_resource(sid,kind):
             from .lyric_service import latest
             version=latest(song)
             if version:return jsonify(status='completed',result=dict(status='available',version_id=version.id,from_database=True))
+    elif kind=='reviews':options=review_options(data)
     elif data:abort(400)
     if kind=='reviews':
         from .reviews import for_song
@@ -354,7 +393,7 @@ def catalog_search():
     try: page=int(request.args.get('page',1))
     except ValueError: abort(400)
     if not 1<=len(query)<=100 or not 1<=page<=100: abort(400)
-    return jsonify(musicbrainz.search(query,page))
+    return jsonify(musicbrainz.search(query,page,**search_options(request.args)))
 
 
 @api.post('/catalog/search-jobs')
@@ -363,10 +402,11 @@ def catalog_search_job():
     from flask import g
     from .resource_jobs import queue,response
     data=body()
-    if set(data)-{'q','page'}:abort(400)
+    if set(data)-{'q','page','field','artist'}:abort(400)
     query=data.get('q');page=data.get('page',1)
     if not isinstance(query,str) or not 1<=len(query.strip())<=100 or type(page) is not int or not 1<=page<=100:abort(400)
     options=dict(query=query.strip(),page=page)
+    options.update(search_options(data))
     saved=musicbrainz.cached_search(**options)
     if saved is not None:
         info=getattr(g,'provider_status',{})
@@ -407,7 +447,13 @@ def song_comments(sid):
           .where(LyricVersion.song_id==sid,db.or_(Comment.user_id==uid,db.and_(Comment.visibility=='friends',Comment.user_id.in_(friend_ids))))
           .order_by(Comment.id.desc()))
     result=page_query(stmt)
-    return jsonify(items=[comment_json(c) for c in result.items],pages=result.pages)
+    payload=dict(items=[comment_json(c) for c in result.items],pages=result.pages)
+    if 'comment_id' in request.args:
+        comment_id=request.args.get('comment_id',type=int)
+        if comment_id is None or not 1<=comment_id<=2**63-1: abort(400)
+        focused=db.session.scalar(stmt.where(Comment.id==comment_id))
+        payload['focused']=comment_json(focused) if focused else None
+    return jsonify(payload)
 
 
 @api.get('/friends/<int:uid>/profile')

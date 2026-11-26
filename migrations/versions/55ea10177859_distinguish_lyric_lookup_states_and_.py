@@ -28,7 +28,7 @@ def upgrade():
     sa.PrimaryKeyConstraint('song_id')
     )
     with op.batch_alter_table('song', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('is_instrumental', sa.Boolean(), server_default=sa.text('0'), nullable=False))
+        batch_op.add_column(sa.Column('is_instrumental', sa.Boolean(), server_default=sa.false(), nullable=False))
 
     # ### end Alembic commands ###
 

@@ -57,7 +57,8 @@ const Friends = (() => {
    pager.innerHTML=page<searchPages?button('검색 결과 더 보기','search-more'):'';
   }catch(e){if(active()&&root===owner&&seq===searchSeq){target.innerHTML=`<p role="alert">${esc(e.message)}</p>${button('다시 검색','search-retry')}`;}}
  }
- const record=(c,i)=>`<article class="fr-track"><div class="fr-track-number" aria-hidden="true">${String(i+1).padStart(2,'0')}</div><div class="fr-track-body"><a class="fr-song" href="#song/${c.song_id}">${esc(c.song_title)}</a><p class="fr-artist">${esc(c.song_artist)}</p><blockquote>${esc(c.quote)}</blockquote><p class="fr-thought">${esc(c.text)}</p><footer>${esc(c.user.name)} <span>@${esc(c.user.username)}</span><time datetime="${esc(c.created_at)}">${esc(new Date(c.created_at).toLocaleDateString('ko-KR'))}</time></footer></div></article>`;
+ const songCommentLink=c=>`#song/${c.song_id}/comment/${c.id}`;
+ const record=(c,i)=>`<article class="fr-track"><div class="fr-track-number" aria-hidden="true">${String(i+1).padStart(2,'0')}</div><div class="fr-track-body"><a class="fr-song" href="${songCommentLink(c)}">${esc(c.song_title)}</a><p class="fr-artist">${esc(c.song_artist)}</p><blockquote>${esc(c.quote)}</blockquote><p class="fr-thought">${esc(c.text)}</p><footer>${esc(c.user.name)} <span>@${esc(c.user.username)}</span><time datetime="${esc(c.created_at)}">${esc(new Date(c.created_at).toLocaleDateString('ko-KR'))}</time></footer></div></article>`;
  async function feed(page=1){
   const seq=++feedSeq,owner=root,target=root.querySelector('#fr-feed'),pager=root.querySelector('#fr-feed-pages');
   const name=relations.find(r=>String(r.user.id)===selected)?.user.name;
@@ -66,9 +67,8 @@ const Friends = (() => {
   if(page===1)target.innerHTML=status('공유한 감상을 불러오는 중');pager.replaceChildren();
   try{const data=await api('/comments?scope=friends&page='+page+(selected?'&user_id='+selected:''));
    if(!active()||root!==owner||seq!==feedSeq)return;
-   const count=page===1?0:target.querySelectorAll('article').length;
    if(page===1)target.replaceChildren();
-   target.insertAdjacentHTML('beforeend',data.items.map(c=>`<a class="fr-share-notification" href="#shared/${c.id}"><span class="fr-notification-dot" aria-hidden="true"></span><span><strong>${esc(c.user.name)}님이 기록을 공유했어요</strong><small>${esc(c.song_title)} · ${esc(c.song_artist)}</small><time datetime="${esc(c.created_at)}">${esc(new Date(c.created_at).toLocaleDateString('ko-KR'))}</time></span><span aria-hidden="true">↗</span></a>`).join(''));
+   target.insertAdjacentHTML('beforeend',data.items.map(c=>`<a class="fr-share-notification" href="${songCommentLink(c)}"><span class="fr-notification-dot" aria-hidden="true"></span><span><strong>${esc(c.user.name)} <span>@${esc(c.user.username)}</span></strong><small>${esc(c.song_title)} · ${esc(c.song_artist)}</small><span class="fr-notification-quote">${esc(c.quote)}</span><span class="fr-notification-text">${esc(c.text)}</span><time datetime="${esc(c.created_at)}">${esc(new Date(c.created_at).toLocaleDateString('ko-KR'))}</time></span><span aria-hidden="true">↗</span></a>`).join(''));
    if(!target.children.length)target.innerHTML=empty('아직 공유한 감상이 없어요. 친구가 공개한 기록이 이곳에 쌓입니다.');
    feedPage=page;feedPages=data.pages;pager.innerHTML=page<feedPages?button('감상 더 보기','feed-more'):'';
   }catch(e){if(active()&&root===owner&&seq===feedSeq){if(page===1)target.replaceChildren();pager.innerHTML=`<p role="alert">${esc(e.message)}</p>${button('다시 불러오기','feed-retry',page)}`;}}

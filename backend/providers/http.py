@@ -6,6 +6,7 @@ import time
 from collections import OrderedDict
 from datetime import datetime,timezone
 from email.utils import parsedate_to_datetime
+from http.client import IncompleteRead
 from urllib.error import HTTPError,URLError
 from urllib.parse import urlencode
 from urllib.request import Request,urlopen
@@ -38,6 +39,8 @@ def report(mode,message=None):
 
 class JsonClient:
     """One local service; bounded persistent public cache, pacing and at most one retry."""
+    retry_unhinted_503=False
+
     def __init__(self,base,interval,cache_path=None,ttl=86400,stale_ttl=7*86400,transform=None):
         self.base,self.interval,self.cache_path=base,interval,cache_path
         self.ttl,self.stale_ttl=ttl,stale_ttl
@@ -150,13 +153,18 @@ class JsonClient:
                 except HTTPError as error:
                     if has_app_context():current_app.logger.warning('provider=%s path=%s status=%s',self.base,path,error.code)
                     if error.code==404:self._write(key,None,store);report('live');return None
+                    retry_after=error.headers.get('Retry-After') if error.headers else None
+                    if error.code==503 and not retry_after and self.retry_unhinted_503:
+                        if attempt==0 and not (cached and cached['value'] and cached['stale_until']>time.time()):
+                            continue
+                        raise ProviderError('제공처를 일시적으로 이용할 수 없습니다.','provider_unavailable',503,3) from error
                     if error.code in (429,503):
-                        cooldown=retry_seconds(error.headers.get('Retry-After'))
+                        cooldown=retry_seconds(retry_after)
                         self.blocked_until=time.time()+cooldown
                         raise ProviderError('음악 제공처가 혼잡하거나 호출이 제한되었습니다.','provider_rate_limited',503,cooldown) from error
                     if error.code in (502,504) and attempt==0:continue
                     raise ProviderError('음악 제공처가 요청을 처리하지 못했습니다.') from error
-                except (TimeoutError,socket.timeout,URLError,OSError) as error:
+                except (TimeoutError,socket.timeout,URLError,OSError,IncompleteRead) as error:
                     if attempt==0:continue
                     timeout=isinstance(error,(TimeoutError,socket.timeout)) or isinstance(getattr(error,'reason',None),(TimeoutError,socket.timeout))
                     raise ProviderError('음악 제공처 응답 시간이 초과되었습니다.' if timeout else '음악 제공처에 연결하지 못했습니다.', 'provider_timeout' if timeout else 'provider_error',504 if timeout else 502) from error

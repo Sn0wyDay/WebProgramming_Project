@@ -55,3 +55,39 @@ def test_registered_key_stays_in_server_header_and_cannot_follow_external_redire
     request=Request('https://lrclib.net/api/get/77',headers={'Lrclib-Api-Key':'test-only-key'})
     with pytest.raises(ProviderError):
         lrclib.LyricsRedirects().redirect_request(request,None,302,'',{},'https://other.test/track')
+
+
+def test_matching_cached_search_survives_direct_endpoint_outage():
+    with patch.object(lrclib.client,'cached',return_value=[record()]),patch.object(lrclib.client,'get',side_effect=AssertionError('Unexpected live lookup')):
+        assert lrclib.find('Syringe','Redoor',264000,album='Hospital')['external_id']=='77'
+
+
+def test_signature_timeout_can_recover_via_search_but_never_means_missing():
+    for rows in ([record()], []):
+        def response(path, params):
+            if path=='/api/get':raise ProviderError('timeout','provider_timeout',504)
+            return rows
+        with patch.object(lrclib.client,'get',side_effect=response):
+            if rows:
+                assert lrclib.find('Syringe','Redoor',264000,album='Hospital')['external_id']=='77'
+            else:
+                with pytest.raises(ProviderError,match='timeout'):
+                    lrclib.find('Syringe','Redoor',264000,album='Hospital')
+
+
+def test_empty_provider_cache_expires_for_retry_without_evicting_other_songs():
+    c=lrclib.LyricsClient('https://lrclib.net',1)
+    with patch('time.time',return_value=100):
+        c._write('miss',[],None)
+        c._write('ok',record(),None)
+    with patch('time.time',return_value=109):
+        assert c._read('miss',None) is None
+        assert c._read('ok',None)['value']==record()
+
+
+def test_cached_verified_signature_for_alternative_title_works_offline():
+    def cached(path,params):
+        return record() if path=='/api/get' and params['track_name']=='Syringe' else None
+    with patch.object(lrclib.client,'cached',side_effect=cached),patch.object(lrclib.client,'get',side_effect=AssertionError('Offline')):
+        hit=lrclib.find('욕망주사기','Redoor',264000,title_aliases=['Syringe'],album='Hospital')
+        assert hit['external_id']=='77' and hit['match_method']=='title_alias'

@@ -56,7 +56,7 @@ async function mountReport() {
     const similarHtml = seeds.length ? `<div class="recommend-top"><label class="form-label">좋아하는 곡<select class="field" id="ai-seed">${seeds.map(s=>`<option value="${s.id}">${esc(s.title)} · ${esc(s.artist)}</option>`).join('')}</select></label>
       <label class="form-label">듣고 싶은 장르<select class="field" id="ai-genre">${genres.map(g=>`<option>${esc(g)}</option>`).join('')}</select></label><button class="button dark" data-find="similar">음악 추천받기</button></div>` : '<a class="button outline" href="#home">홈에서 음악 찾기</a>';
     const bodies = [topHtml,talkedHtml,overallHtml,similarHtml];
-    view.innerHTML = `<header><h1>AI 리포트</h1><p>내 음악 기록과 장르를 기준으로 찾는 카탈로그 추천입니다. Gemini 추천은 설정 대기 중입니다.</p></header>
+    view.innerHTML = `<header><h1>AI 리포트</h1><p>내 음악 기록과 장르를 기준으로 MusicBrainz에서 추천 곡을 찾습니다.</p></header>
       <nav class="ai-chapters" aria-label="리포트 목차">${chapters.map(([id,label],i)=>`<button class="ai-chapter" data-chapter="${id}"><span>0${i+1}</span>${label}</button>`).join('')}</nav>
       <div class="ai-story">${chapters.map(([id,,title,tone],i)=>`<section id="${id}" class="ai-slide ai-slide-${tone} is-in"><div class="ai-slide-head"><h2>${title}</h2></div>${bodies[i]}${i>=2?'<div class="ai-results" aria-live="polite"></div>':''}</section>`).join('')}</div>`;
   }

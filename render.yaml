@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: re-verse-music
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt "gunicorn>=23,<27" "psycopg2-binary>=2.9,<3"
+    startCommand: gunicorn --workers 1 --threads 4 --bind "0.0.0.0:$PORT" 'run:prepare_app()'
+    healthCheckPath: /
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: re-verse-music-db
+          property: connectionString
+
+databases:
+  - name: re-verse-music-db
+    region: singapore
+    plan: free
+    ipAllowList: []
